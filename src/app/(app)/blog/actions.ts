@@ -287,7 +287,7 @@ export async function syncBlogToGitHub(): Promise<{ ok: boolean; error?: string 
 
 // ─── Import from GitHub ───────────────────────────────────────────────────────
 
-export async function importFromGitHub(): Promise<{ imported: number; error?: string }> {
+export async function importFromGitHub(): Promise<{ imported: number; skipped: number; error?: string }> {
   await requireAdmin()
 
   try {
@@ -334,9 +334,10 @@ export async function importFromGitHub(): Promise<{ imported: number; error?: st
 
     // 3. Import posts not already in DB
     let imported = 0
+    let skipped = 0
     for (const post of jsonArray) {
       if (!post.Published) continue
-      if (existingSlugs.has(post.Slug)) continue
+      if (existingSlugs.has(post.Slug)) { skipped++; continue }
 
       const insert: TablesInsert<"posts"> = {
         title: post.Title,
@@ -354,9 +355,9 @@ export async function importFromGitHub(): Promise<{ imported: number; error?: st
       if (!error) imported++
     }
 
-    return { imported }
+    return { imported, skipped }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return { imported: 0, error: message }
+    return { imported: 0, skipped: 0, error: message }
   }
 }

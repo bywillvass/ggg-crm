@@ -24,9 +24,11 @@ export function BlogList({ initialPosts }: { initialPosts: PostRow[] }) {
     startImport(async () => {
       const result = await importFromGitHub()
       if (result.error) {
-        toast.error(result.error)
+        toast.error(`Import failed: ${result.error}`)
       } else {
-        toast.success(`Imported ${result.imported} post${result.imported === 1 ? "" : "s"}`)
+        const parts = [`${result.imported} imported`]
+        if (result.skipped > 0) parts.push(`${result.skipped} already existed`)
+        toast.success(parts.join(", "))
         router.refresh()
       }
     })

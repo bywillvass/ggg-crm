@@ -291,3 +291,98 @@ If you haven't already done Steps 1-6 from the Part 2 manual steps above, do tho
 2. Under "Two-factor authentication", click "Enrol authenticator"
 3. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)
 4. Enter the 6-digit code to verify and complete enrolment
+
+---
+
+## Part 4 - Contacts, players, leads, tasks, activities (2026-10-01)
+
+### What was built
+
+**Infrastructure:**
+- `src/lib/activity.ts` - `logActivity()` helper used by all server actions to write to the activities table
+- `src/app/(app)/activities/actions.ts` - `logManualActivity` server action for notes, calls, SMS, WhatsApp from the UI
+
+**Server actions (all admin-gated via requireAdmin()):**
+- `src/app/(app)/contacts/actions.ts` - listContacts (with search/filter), getContact (with all relations), createContact, updateContact, archiveContact, mergeContacts (service-role, moves all relations), addTagToContact, removeTagFromContact
+- `src/app/(app)/players/actions.ts` - listPlayers, getPlayer (with all relations), createPlayer, updatePlayer, archivePlayer, linkPlayerContact, unlinkPlayerContact
+- `src/app/(app)/leads/actions.ts` - listLeads, getLead, createLead (with activity log), updateLead, updateLeadStage (with activity log), archiveLead, bulkUpdateStage, bulkAssignOwner, bulkArchive, importCSVLeads (POSTs to /api/ingest - works once Part 5 is done)
+- `src/app/(app)/tasks/actions.ts` - listTasks, createTask, updateTask, completeTask, deleteTask, getProfiles
+
+**API:**
+- `src/app/api/search/route.ts` - GET /api/search?q= - searches contacts, players, leads, events. Role-aware: coaches skip contacts and leads.
+
+**Shared components:**
+- `src/components/shared/ActivityTimeline.tsx` - shows activities list with icons per type, newest first
+- `src/components/shared/AddActivityDialog.tsx` - controlled dialog to log note/call/SMS/WhatsApp
+- `src/components/shared/AddTaskDialog.tsx` - controlled dialog to create a task
+- `src/components/shared/TaskList.tsx` - checkable task list with context links and delete
+
+**Contacts:**
+- `src/components/contacts/ContactsShell.tsx` - table with search + filters (consent, source, unsubscribed), bulk select + bulk actions (add tag, archive), new contact dialog, pagination (25/page)
+- `src/components/contacts/ContactDetail.tsx` - 6-tab detail view: Overview (editable), Players, Leads, Emails, Timeline, Tasks. Header has archive + merge buttons.
+- `src/components/contacts/MergeContactsDialog.tsx` - pick duplicate, preview side-by-side, merge
+
+**Players:**
+- `src/components/players/PlayersShell.tsx` - table with filters (birth year, position, club, level, state, status), new player dialog, pagination
+- `src/components/players/PlayerDetail.tsx` - 8-tab profile: Profile (editable), Guardians (tap-to-call), Events, Assessments, Documents (placeholder), Invoices (placeholder), Timeline, Tasks
+
+**Leads:**
+- `src/components/leads/LeadsShell.tsx` - Board (kanban with @dnd-kit drag-drop, 7 stage columns) + Table toggle. Filters: source, form type, stage, owner, date range, follow-up due. Bulk actions: stage, owner, archive, CSV export. New lead dialog. Import link.
+- `src/components/leads/LeadDetailSheet.tsx` - Sheet drawer for desktop
+- `src/components/leads/LeadDetail.tsx` - detail content (summary, raw submission, quick actions, timeline, stage selector). Shared by sheet and [id] page.
+
+**Leads import:**
+- `src/app/(app)/leads/import/page.tsx` - 4-step CSV wizard: upload, preview 20 rows, map columns to targets, choose source/form type, import via /api/ingest, show summary
+
+**Tasks:**
+- `src/components/tasks/TasksShell.tsx` - My tasks / All tasks tabs, sub-filters (due today, overdue, upcoming, done), inline check-off, new task dialog
+
+**TopBar updated:**
+- Global search: debounced input hits /api/search, shows grouped dropdown (Contacts, Players, Leads, Events), navigates on click
+
+**Pages created:**
+- `/contacts` - contacts list
+- `/contacts/[id]` - contact detail
+- `/players` - players list
+- `/players/[id]` - player profile
+- `/leads` - board + table view
+- `/leads/[id]` - lead detail (full page, same content as sheet)
+- `/leads/import` - CSV import wizard
+- `/tasks` - tasks list (admin only)
+
+### Decisions made
+
+- **CSV import calls /api/ingest**: The import server action POSTs to /api/ingest. This will return 404 until Part 5 builds that endpoint. The UI is fully built; it just won't complete until Part 5 is deployed.
+- **Contacts list is client-side filtered**: Contacts are fetched server-side (all matching archived=false) and filtered in the browser. Fine for typical agency scale (hundreds of contacts). Avoids extra API calls on each filter change.
+- **Leads board is client-side filtered from initial server fetch**: Same approach as contacts. On drag-end, the stage update calls the server action and the local state updates optimistically.
+- **mergeContacts uses service role**: Needed to bypass RLS when re-assigning all relations from the duplicate contact to the master.
+- **Invoices and Documents tabs on player detail are placeholders**: They render a "Coming in Part 7/10" message. Wired properly once those Parts are built.
+- **Tasks page is admin-only**: Coach is redirected to /dashboard. Coach tasks are visible in the detail pages (lead, contact, player) but the standalone /tasks page is admin.
+- **importCSVLeads uses field alias targets as column values**: The UI maps CSV column headers to target names (e.g. "contact_email"). The server action passes these mapped field names directly in the `fields` object. Part 5's /api/ingest normalises them to built-in defaults.
+
+---
+
+## Manual steps Will must do BEFORE the next Part (Part 5 - Lead ingestion)
+
+### Step 1 - Complete all previous manual steps first
+
+Make sure you have done all steps from Part 2 and Part 3 manual sections (especially: admin account, disable public signups, Vault secret).
+
+### Step 2 - Test Part 4 screens
+
+1. Start the dev server: `npm run dev`
+2. Sign in and verify these pages load without errors:
+   - http://localhost:3000/contacts
+   - http://localhost:3000/players
+   - http://localhost:3000/leads
+   - http://localhost:3000/tasks
+3. Create a test contact: go to /contacts, click "New contact", fill in the form, click Save
+4. Create a test player and link it to the contact from the player's Guardians tab
+5. Create a test lead from /leads -> "New lead"
+6. Test the kanban board: drag a lead card between stage columns
+7. Test global search: type a name in the top bar search
+8. The CSV import (/leads/import) is fully built but the actual import won't complete until Part 5 (the /api/ingest endpoint). The upload and column-mapping steps will work; clicking "Import" will show an error until Part 5.
+
+### Step 3 - No database migrations needed for Part 4
+
+Part 4 is all UI and server actions using the existing schema from Part 2. No new migrations are required.

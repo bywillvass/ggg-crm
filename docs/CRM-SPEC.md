@@ -72,8 +72,7 @@ GITHUB_BRANCH=main
 ## 3. Brand and UI
 
 - Colours: navy `#0C0F4C` (primary, sidebar), gold `#C9A227` (accents, primary buttons, active states), white. Neutral greys for surfaces and borders.
-- Fonts: Gotham for headings, DM Sans for body. Gotham loads from the same Adobe Fonts kit the website uses - find the `use.typekit.net/....css` link in the website repo and reuse it. Fallback to DM Sans if it fails. Will must add `crm.gingaglobalgroup.com` and `localhost` to the kit's allowed domains in Adobe Fonts (note in PROGRESS.md).
-- DM Sans via `next/font/google`.
+- Fonts: Poppins for headings, DM Sans for body. Both via `next/font/google`.
 - No italics anywhere. Short hyphens only.
 - Layout: left sidebar nav (collapses to a bottom nav / hamburger on mobile), top bar with search and user menu.
 - Mobile first for: event check-in, tour mode, player profile, lead detail. These are used on a phone at the field and overseas.

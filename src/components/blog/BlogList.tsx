@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useState, useTransition, useMemo } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Plus, RefreshCw, Download } from "lucide-react"
+import { Plus, RefreshCw, Download, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react"
 import { cn } from "cn"
 import {
   publishPost,
@@ -14,11 +14,45 @@ import {
   type PostRow,
 } from "@/app/(app)/blog/actions"
 
+type SortKey = "title" | "status" | "category" | "tags" | "published_at"
+type SortDir = "asc" | "desc"
+
+function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey | null; sortDir: SortDir }) {
+  if (sortKey !== col) return <ChevronsUpDown className="h-3 w-3 opacity-40" />
+  return sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+}
+
 export function BlogList({ initialPosts }: { initialPosts: PostRow[] }) {
   const router = useRouter()
   const [posts, setPosts] = useState(initialPosts)
   const [importing, startImport] = useTransition()
   const [syncing, setSyncing] = useState<string | null>(null)
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>("asc")
+
+  function handleSort(key: SortKey) {
+    if (sortKey === key) {
+      if (sortDir === "asc") setSortDir("desc")
+      else { setSortKey(null); setSortDir("asc") }
+    } else {
+      setSortKey(key)
+      setSortDir("asc")
+    }
+  }
+
+  const sorted = useMemo(() => {
+    if (!sortKey) return posts
+    return [...posts].sort((a, b) => {
+      let av: string, bv: string
+      if (sortKey === "title") { av = a.title.toLowerCase(); bv = b.title.toLowerCase() }
+      else if (sortKey === "status") { av = a.published ? "published" : "draft"; bv = b.published ? "published" : "draft" }
+      else if (sortKey === "category") { av = (a.category ?? "").toLowerCase(); bv = (b.category ?? "").toLowerCase() }
+      else if (sortKey === "tags") { av = (a.tags?.[0] ?? "").toLowerCase(); bv = (b.tags?.[0] ?? "").toLowerCase() }
+      else { av = a.published_at ?? ""; bv = b.published_at ?? "" }
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0
+      return sortDir === "asc" ? cmp : -cmp
+    })
+  }, [posts, sortKey, sortDir])
 
   async function handleImport() {
     startImport(async () => {
@@ -111,21 +145,18 @@ export function BlogList({ initialPosts }: { initialPosts: PostRow[] }) {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">
-                    Title
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">
-                    Status
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">
-                    Category
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">
-                    Tags
-                  </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">
-                    Published
-                  </th>
+                  {(["title", "status", "category", "tags", "published_at"] as SortKey[]).map((key) => (
+                    <th key={key} className="text-left px-4 py-3 text-xs uppercase tracking-wide">
+                      <button
+                        type="button"
+                        onClick={() => handleSort(key)}
+                        className="inline-flex items-center gap-1 font-medium text-gray-500 hover:text-gray-900 transition-colors"
+                      >
+                        {key === "published_at" ? "Published" : key.charAt(0).toUpperCase() + key.slice(1)}
+                        <SortIcon col={key} sortKey={sortKey} sortDir={sortDir} />
+                      </button>
+                    </th>
+                  ))}
                   <th className="text-left px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">
                     Sync
                   </th>
@@ -135,7 +166,7 @@ export function BlogList({ initialPosts }: { initialPosts: PostRow[] }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
-                {posts.map((post) => (
+                {sorted.map((post) => (
                   <tr key={post.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3">
                       <Link

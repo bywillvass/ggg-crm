@@ -32,6 +32,7 @@ import { EventCheckInTab } from "./EventCheckInTab"
 import { EventLogisticsTab } from "./EventLogisticsTab"
 import { EventDocumentsTab } from "./EventDocumentsTab"
 import { EventAssessmentsTab } from "./EventAssessmentsTab"
+import { EventInvoicesTab } from "./EventInvoicesTab"
 import type { Database, Tables } from "@/lib/database.types"
 
 type EventType = Database["public"]["Enums"]["event_type"]
@@ -428,9 +429,7 @@ export function EventDetail({
       )}
 
       {tab === "invoices" && (
-        <div className="text-center py-16 text-gray-400">
-          <p className="text-sm">Invoices - coming in Part 10</p>
-        </div>
+        <EventInvoicesTab eventId={event.id} />
       )}
 
       {/* Edit dialog */}

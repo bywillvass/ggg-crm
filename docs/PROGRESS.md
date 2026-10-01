@@ -251,3 +251,43 @@ New UI components:
 - **Account page MFA**: uses browser Supabase client (must be client-side). QR code rendered via Next.js Image component with `unoptimized` since it's a data URL.
 - **API route for invite**: `/api/admin/invite` exists as a REST endpoint using `serviceClient`. The server action in `users/actions.ts` calls `serviceClient` directly (server action, so safe). The API route provides an alternative HTTP interface.
 - **IntegrationsStatus errors**: queries `ingest_log` with `status = 'error'` (not 'failed') to match the seed/schema enum values used in the migration.
+- **Database trigger**: The `handle_new_user` trigger from Part 2 is confirmed correct - it creates a profiles row on every new auth.users insert, defaulting role to 'coach'. No new migration needed.
+
+---
+
+## Manual steps Will must do BEFORE the next Part (Part 4 - Contacts, players, leads, tasks, activities)
+
+### Step 1 - Complete the Part 2 manual steps first (if not done)
+
+If you haven't already done Steps 1-6 from the Part 2 manual steps above, do those first. In particular:
+- Disable public signups (Step 3)
+- Make yourself admin (Step 4)
+- Add CRON_SECRET to Vault (Step 5)
+
+### Step 2 - Verify settings page works
+
+1. Start the dev server: `npm run dev`
+2. Sign in at http://localhost:3000/login
+3. Go to http://localhost:3000/settings
+4. Confirm all 9 tabs are visible: General, Bank, Invoices, Email, Users, Document Types, Field Mappings, Templates, Integrations
+5. On the General tab, fill in your org details and click Save
+
+### Step 3 - Invite Theo and Marcos (when ready)
+
+1. Go to http://localhost:3000/settings?tab=users (or the deployed URL)
+2. Click "Invite user"
+3. Enter their email, name, and role (admin for Theo, coach for Marcos)
+4. They will receive an invite email - they click the link, set a password, and can sign in
+
+### Step 4 - Set up your email settings (required for email to work in Part 9)
+
+1. Go to http://localhost:3000/settings?tab=email
+2. Fill in the From Name, From Address (must be a verified Resend domain), and Reply-To
+3. Click Save
+
+### Step 5 - MFA (recommended for admins)
+
+1. Go to http://localhost:3000/settings/account
+2. Under "Two-factor authentication", click "Enrol authenticator"
+3. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)
+4. Enter the 6-digit code to verify and complete enrolment

@@ -192,6 +192,62 @@ Cron job: pg_cron job "run-crm-jobs" scheduled every 5 minutes, calls https://cr
 
 ---
 
-## Part 3 - Settings and users (not started)
+## Part 3 - Settings and users (2026-10-01)
 
-Coming next session.
+### What was built
+
+Settings page (`/settings`) - admin only, tabbed interface with 9 tabs:
+1. General - org_name, abn, address, phone, email, website, logo URL
+2. Bank - account name, BSB, account number, PayID
+3. Invoices - GST toggle, GST rate, prefix, next number, payment terms, footer
+4. Email - from name/address, reply-to, footer HTML, daily cap
+5. Users - list all profiles, invite by email+name+role, change role, deactivate/reactivate
+6. Document types - list/add/edit document_types rows
+7. Field mappings - list/add/edit/delete ingest_field_mappings rows
+8. Templates - list/add/edit/delete email_templates rows
+9. Integrations - last ingest received per source, recent errors, last blog sync
+
+Account page (`/settings/account`) - any logged-in user:
+- Shows email, name, role badge
+- Password reset via email link
+- MFA: enrol TOTP (QR code + secret + verification code), or unenrol if already enrolled
+
+New UI components:
+- `src/components/ui/textarea.tsx` - native textarea styled
+- `src/components/ui/switch.tsx` - styled toggle switch (button with role="switch")
+- `src/components/ui/select.tsx` - native select styled
+- `src/components/ui/badge.tsx` - inline badge with default/success/warning/destructive/secondary variants
+
+### Files created
+
+- src/components/ui/textarea.tsx
+- src/components/ui/switch.tsx
+- src/components/ui/select.tsx
+- src/components/ui/badge.tsx
+- src/app/(app)/settings/layout.tsx
+- src/app/(app)/settings/page.tsx
+- src/app/(app)/settings/SettingsShell.tsx
+- src/app/(app)/settings/actions.ts
+- src/app/(app)/settings/users/actions.ts
+- src/app/(app)/settings/account/page.tsx
+- src/app/(app)/settings/account/AccountShell.tsx
+- src/app/api/admin/invite/route.ts
+- src/components/settings/GeneralSettings.tsx
+- src/components/settings/BankSettings.tsx
+- src/components/settings/InvoiceSettings.tsx
+- src/components/settings/EmailSettings.tsx
+- src/components/settings/UsersSettings.tsx
+- src/components/settings/DocumentTypesSettings.tsx
+- src/components/settings/FieldMappingsSettings.tsx
+- src/components/settings/TemplatesSettings.tsx
+- src/components/settings/IntegrationsStatus.tsx
+
+### Decisions made
+
+- **Zod v4 coerce.number() + hookform resolvers**: The `@hookform/resolvers/zod` resolver infers `unknown` for `z.coerce.number()` types in zod v4 at the TypeScript level. Fixed by using `z.string()` for number input fields and converting to numbers manually in the submit handler.
+- **DialogTrigger asChild**: base-ui Dialog.Trigger doesn't support `asChild` prop. Used controlled open state (`dialogOpen` + `setDialogOpen`) and a plain Button with `onClick` instead of wrapping in DialogTrigger.
+- **Logo upload**: Spec mentions logo upload; implemented as URL field instead since no dedicated storage bucket was set up. Will can paste a Supabase storage URL from the blog-media bucket.
+- **Settings page tab routing**: uses `useSearchParams()` + `router.replace()` wrapped in Suspense (required by Next.js 16 for `useSearchParams` in client components).
+- **Account page MFA**: uses browser Supabase client (must be client-side). QR code rendered via Next.js Image component with `unoptimized` since it's a data URL.
+- **API route for invite**: `/api/admin/invite` exists as a REST endpoint using `serviceClient`. The server action in `users/actions.ts` calls `serviceClient` directly (server action, so safe). The API route provides an alternative HTTP interface.
+- **IntegrationsStatus errors**: queries `ingest_log` with `status = 'error'` (not 'failed') to match the seed/schema enum values used in the migration.

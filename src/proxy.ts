@@ -12,6 +12,7 @@ const PUBLIC_PATHS = [
   '/unsubscribe',
   '/rsvp',
   '/upload',
+  '/api/upload',
 ]
 
 function isPublic(pathname: string) {

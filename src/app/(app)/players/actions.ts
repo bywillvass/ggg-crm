@@ -1,7 +1,9 @@
 "use server"
 
+import { unstable_cache, updateTag } from "next/cache"
 import { requireAdmin } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
+import { serviceClient } from "@/lib/supabase/service"
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types"
 
 export type PlayerDetail = Tables<"players"> & {
@@ -11,6 +13,20 @@ export type PlayerDetail = Tables<"players"> & {
   activities: Tables<"activities">[]
   tasks: Tables<"tasks">[]
 }
+
+const _cachedPlayers = unstable_cache(
+  async (): Promise<Tables<"players">[]> => {
+    const { data } = await serviceClient
+      .from("players")
+      .select("*")
+      .is("archived_at", null)
+      .order("last_name", { ascending: true })
+      .order("first_name", { ascending: true })
+    return data ?? []
+  },
+  ["players"],
+  { revalidate: 60, tags: ["players"] }
+)
 
 export async function listPlayers(filters?: {
   birth_year?: number
@@ -22,46 +38,44 @@ export async function listPlayers(filters?: {
   search?: string
 }): Promise<Tables<"players">[]> {
   await requireAdmin()
-  const supabase = await createClient()
 
-  let query = supabase
-    .from("players")
-    .select("*")
-    .is("archived_at", null)
-    .order("last_name", { ascending: true })
-    .order("first_name", { ascending: true })
-
-  if (filters?.search) {
-    const s = filters.search
-    query = query.or(`first_name.ilike.%${s}%,last_name.ilike.%${s}%`)
-  }
+  let results = await _cachedPlayers()
 
   if (filters?.birth_year) {
-    query = query.eq("birth_year", filters.birth_year)
+    results = results.filter((p) => p.birth_year === filters.birth_year)
   }
 
   if (filters?.position) {
-    query = query.eq("position", filters.position)
+    results = results.filter((p) => p.position === filters.position)
   }
 
   if (filters?.club) {
-    query = query.ilike("current_club", `%${filters.club}%`)
+    const club = filters.club.toLowerCase()
+    results = results.filter((p) => (p.current_club ?? "").toLowerCase().includes(club))
   }
 
   if (filters?.level) {
-    query = query.eq("level", filters.level)
+    results = results.filter((p) => p.level === filters.level)
   }
 
   if (filters?.state) {
-    query = query.eq("state", filters.state)
+    results = results.filter((p) => p.state === filters.state)
   }
 
   if (filters?.status) {
-    query = query.eq("status", filters.status)
+    results = results.filter((p) => p.status === filters.status)
   }
 
-  const { data } = await query
-  return data ?? []
+  if (filters?.search) {
+    const s = filters.search.toLowerCase()
+    results = results.filter(
+      (p) =>
+        (p.first_name ?? "").toLowerCase().includes(s) ||
+        (p.last_name ?? "").toLowerCase().includes(s)
+    )
+  }
+
+  return results
 }
 
 export async function getPlayer(id: string): Promise<PlayerDetail | null> {
@@ -98,6 +112,7 @@ export async function createPlayer(
     .select()
     .single()
 
+  updateTag("players")
   return { data, error: error?.message ?? null }
 }
 
@@ -113,6 +128,7 @@ export async function updatePlayer(
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("players")
   return { error: error?.message ?? null }
 }
 
@@ -125,6 +141,7 @@ export async function archivePlayer(id: string): Promise<{ error: string | null 
     .update({ archived_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("players")
   return { error: error?.message ?? null }
 }
 
@@ -143,6 +160,7 @@ export async function linkPlayerContact(
     { onConflict: "player_id,contact_id" }
   )
 
+  updateTag("players")
   return { error: error?.message ?? null }
 }
 
@@ -152,5 +170,6 @@ export async function unlinkPlayerContact(id: string): Promise<{ error: string |
 
   const { error } = await supabase.from("player_contacts").delete().eq("id", id)
 
+  updateTag("players")
   return { error: error?.message ?? null }
 }

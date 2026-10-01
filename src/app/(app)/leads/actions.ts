@@ -1,7 +1,9 @@
 "use server"
 
+import { unstable_cache, updateTag } from "next/cache"
 import { requireAdmin } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
+import { serviceClient } from "@/lib/supabase/service"
 import { logActivity } from "@/lib/activity"
 import type { Tables, TablesInsert, TablesUpdate, Database } from "@/lib/database.types"
 
@@ -22,6 +24,19 @@ export type LeadDetail = Tables<"leads"> & {
   tasks: Tables<"tasks">[]
 }
 
+const _cachedLeads = unstable_cache(
+  async (): Promise<LeadWithRelations[]> => {
+    const { data } = await serviceClient
+      .from("leads")
+      .select("*, contacts(*), players(*), profiles!leads_owner_id_fkey(full_name)")
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+    return (data ?? []) as LeadWithRelations[]
+  },
+  ["leads"],
+  { revalidate: 60, tags: ["leads"] }
+)
+
 export async function listLeads(filters?: {
   source?: string
   form_type?: string
@@ -31,35 +46,37 @@ export async function listLeads(filters?: {
   archived?: boolean
 }): Promise<LeadWithRelations[]> {
   await requireAdmin()
-  const supabase = await createClient()
 
-  let query = supabase
-    .from("leads")
-    .select("*, contacts(*), players(*), profiles!leads_owner_id_fkey(full_name)")
-    .order("created_at", { ascending: false })
+  let results: LeadWithRelations[]
 
-  if (!filters?.archived) {
-    query = query.is("archived_at", null)
+  if (filters?.archived === true) {
+    // Archived view needs rows where archived_at IS NOT NULL — skip cache
+    const supabase = await createClient()
+    const { data } = await supabase
+      .from("leads")
+      .select("*, contacts(*), players(*), profiles!leads_owner_id_fkey(full_name)")
+      .order("created_at", { ascending: false })
+    results = (data ?? []) as LeadWithRelations[]
+  } else {
+    results = await _cachedLeads()
   }
 
   if (filters?.source) {
-    query = query.eq("source", filters.source as LeadSource)
+    results = results.filter((l) => l.source === (filters.source as LeadSource))
   }
 
   if (filters?.form_type) {
-    query = query.ilike("form_type", `%${filters.form_type}%`)
+    const ft = filters.form_type.toLowerCase()
+    results = results.filter((l) => (l.form_type ?? "").toLowerCase().includes(ft))
   }
 
   if (filters?.stage) {
-    query = query.eq("stage", filters.stage as LeadStage)
+    results = results.filter((l) => l.stage === (filters.stage as LeadStage))
   }
 
   if (filters?.owner_id) {
-    query = query.eq("owner_id", filters.owner_id)
+    results = results.filter((l) => l.owner_id === filters.owner_id)
   }
-
-  const { data } = await query
-  let results = (data ?? []) as LeadWithRelations[]
 
   if (filters?.search) {
     const s = filters.search.toLowerCase()
@@ -122,6 +139,7 @@ export async function createLead(
     })
   }
 
+  updateTag("leads")
   return { data, error: error?.message ?? null }
 }
 
@@ -137,6 +155,7 @@ export async function updateLead(
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("leads")
   return { error: error?.message ?? null }
 }
 
@@ -162,6 +181,7 @@ export async function updateLeadStage(
     })
   }
 
+  updateTag("leads")
   return { error: error?.message ?? null }
 }
 
@@ -174,6 +194,7 @@ export async function archiveLead(id: string): Promise<{ error: string | null }>
     .update({ archived_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("leads")
   return { error: error?.message ?? null }
 }
 
@@ -189,6 +210,7 @@ export async function bulkUpdateStage(
     .update({ stage, updated_at: new Date().toISOString() })
     .in("id", ids)
 
+  updateTag("leads")
   return { error: error?.message ?? null }
 }
 
@@ -204,6 +226,7 @@ export async function bulkAssignOwner(
     .update({ owner_id, updated_at: new Date().toISOString() })
     .in("id", ids)
 
+  updateTag("leads")
   return { error: error?.message ?? null }
 }
 
@@ -216,6 +239,7 @@ export async function bulkArchive(ids: string[]): Promise<{ error: string | null
     .update({ archived_at: new Date().toISOString() })
     .in("id", ids)
 
+  updateTag("leads")
   return { error: error?.message ?? null }
 }
 

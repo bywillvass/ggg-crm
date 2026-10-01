@@ -1,7 +1,9 @@
 "use server"
 
+import { unstable_cache, updateTag } from "next/cache"
 import { requireAdmin, getCurrentRole, requireAuth } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
+import { serviceClient } from "@/lib/supabase/service"
 import { logActivity } from "@/lib/activity"
 import type { Tables, TablesInsert, TablesUpdate, Database } from "@/lib/database.types"
 import { redirect } from "next/navigation"
@@ -40,6 +42,19 @@ export type EventDetail = Tables<"events"> & {
 
 // ─── Events ──────────────────────────────────────────────────────────────────
 
+const _cachedEvents = unstable_cache(
+  async (): Promise<EventSummary[]> => {
+    const { data } = await serviceClient
+      .from("events")
+      .select("*, event_participants(status)")
+      .is("archived_at", null)
+      .order("start_at", { ascending: false })
+    return (data ?? []) as EventSummary[]
+  },
+  ["events"],
+  { revalidate: 60, tags: ["events"] }
+)
+
 export async function listEvents(filters?: {
   type?: string
   status?: string
@@ -47,23 +62,27 @@ export async function listEvents(filters?: {
   search?: string
 }): Promise<EventSummary[]> {
   await requireAnyRole()
-  const supabase = await createClient()
+
+  let results = await _cachedEvents()
   const now = new Date().toISOString()
 
-  let query = supabase
-    .from("events")
-    .select("*, event_participants(status)")
-    .is("archived_at", null)
-    .order("start_at", { ascending: false })
+  if (filters?.type) {
+    results = results.filter((e) => e.type === (filters.type as EventType))
+  }
+  if (filters?.status) {
+    results = results.filter((e) => e.status === (filters.status as EventStatus))
+  }
+  if (filters?.timeframe === "upcoming") {
+    results = results.filter((e) => e.start_at >= now)
+  } else if (filters?.timeframe === "past") {
+    results = results.filter((e) => e.start_at < now)
+  }
+  if (filters?.search) {
+    const s = filters.search.toLowerCase()
+    results = results.filter((e) => (e.title ?? "").toLowerCase().includes(s))
+  }
 
-  if (filters?.type) query = query.eq("type", filters.type as EventType)
-  if (filters?.status) query = query.eq("status", filters.status as EventStatus)
-  if (filters?.timeframe === "upcoming") query = query.gte("start_at", now)
-  if (filters?.timeframe === "past") query = query.lt("start_at", now)
-  if (filters?.search) query = query.ilike("title", `%${filters.search}%`)
-
-  const { data } = await query
-  return (data ?? []) as EventSummary[]
+  return results
 }
 
 export async function getEvent(id: string): Promise<EventDetail | null> {
@@ -131,6 +150,7 @@ export async function createEvent(
     })
   }
 
+  updateTag("events")
   return { data, error: error?.message ?? null }
 }
 
@@ -146,6 +166,7 @@ export async function updateEvent(
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("events")
   return { error: error?.message ?? null }
 }
 
@@ -158,6 +179,7 @@ export async function archiveEvent(id: string): Promise<{ error: string | null }
     .update({ archived_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("events")
   return { error: error?.message ?? null }
 }
 

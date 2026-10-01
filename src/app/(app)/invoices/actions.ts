@@ -1,5 +1,6 @@
 "use server"
 
+import { unstable_cache, updateTag } from "next/cache"
 import { requireAdmin, getCurrentRole, requireAuth } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
@@ -77,6 +78,23 @@ function contactDisplayName(c: ContactForInvoice | null | undefined): string {
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
+const _cachedInvoices = unstable_cache(
+  async (): Promise<InvoiceRow[]> => {
+    const { data } = await serviceClient
+      .from("invoices")
+      .select(`
+        *,
+        contacts:contact_id(id, first_name, last_name, email),
+        players:player_id(id, first_name, last_name),
+        events:event_id(id, title, start_at)
+      `)
+      .order("created_at", { ascending: false })
+    return (data ?? []) as InvoiceRow[]
+  },
+  ["invoices"],
+  { revalidate: 60, tags: ["invoices"] }
+)
+
 export async function listInvoices(filters?: {
   status?: string
   eventId?: string
@@ -84,33 +102,23 @@ export async function listInvoices(filters?: {
   dateTo?: string
 }): Promise<InvoiceRow[]> {
   await requireAdmin()
-  const supabase = await createClient()
 
-  let query = supabase
-    .from("invoices")
-    .select(`
-      *,
-      contacts:contact_id(id, first_name, last_name, email),
-      players:player_id(id, first_name, last_name),
-      events:event_id(id, title, start_at)
-    `)
-    .order("created_at", { ascending: false })
+  let results = await _cachedInvoices()
 
   if (filters?.status) {
-    query = query.eq("status", filters.status as Tables<"invoices">["status"])
+    results = results.filter((i) => i.status === (filters.status as Tables<"invoices">["status"]))
   }
   if (filters?.eventId) {
-    query = query.eq("event_id", filters.eventId)
+    results = results.filter((i) => i.event_id === filters.eventId)
   }
   if (filters?.dateFrom) {
-    query = query.gte("issue_date", filters.dateFrom)
+    results = results.filter((i) => i.issue_date >= filters.dateFrom!)
   }
   if (filters?.dateTo) {
-    query = query.lte("issue_date", filters.dateTo)
+    results = results.filter((i) => i.issue_date <= filters.dateTo!)
   }
 
-  const { data } = await query
-  return (data ?? []) as InvoiceRow[]
+  return results
 }
 
 export async function getInvoice(id: string): Promise<InvoiceDetail | null> {
@@ -230,6 +238,7 @@ export async function createInvoice(
     created_by: user.id,
   })
 
+  updateTag("invoices")
   return { data: invoice, error: null }
 }
 
@@ -278,6 +287,7 @@ export async function updateInvoice(
     )
   }
 
+  updateTag("invoices")
   return { error: null }
 }
 
@@ -297,6 +307,7 @@ export async function deleteInvoice(id: string): Promise<{ error: string | null 
   await supabase.from("invoice_items").delete().eq("invoice_id", id)
   const { error } = await supabase.from("invoices").delete().eq("id", id)
 
+  updateTag("invoices")
   return { error: error?.message ?? null }
 }
 
@@ -313,6 +324,7 @@ export async function voidInvoice(id: string): Promise<{ error: string | null }>
     })
     .eq("id", id)
 
+  updateTag("invoices")
   return { error: error?.message ?? null }
 }
 
@@ -375,6 +387,7 @@ export async function recordPayment(
     created_by: user.id,
   })
 
+  updateTag("invoices")
   return { error: null }
 }
 
@@ -423,6 +436,7 @@ export async function deletePayment(paymentId: string): Promise<{ error: string 
     })
     .eq("id", payment.invoice_id)
 
+  updateTag("invoices")
   return { error: null }
 }
 
@@ -528,6 +542,7 @@ export async function bulkCreateFromEvent(
       .eq("id", 1)
   }
 
+  updateTag("invoices")
   return { created, error: null }
 }
 
@@ -632,6 +647,7 @@ export async function sendInvoice(
     created_by: user.id,
   })
 
+  updateTag("invoices")
   return { ok: true }
 }
 

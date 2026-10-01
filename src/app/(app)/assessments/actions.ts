@@ -1,7 +1,9 @@
 "use server"
 
-import { requireAdmin, getCurrentRole, requireAuth } from "@/lib/auth/role"
+import { unstable_cache, updateTag } from "next/cache"
+import { requireAdmin, getCurrentRole, requireAuth, getAuthUser } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
+import { serviceClient } from "@/lib/supabase/service"
 import { logActivity } from "@/lib/activity"
 import { redirect } from "next/navigation"
 import type { Tables, TablesInsert, TablesUpdate, Database } from "@/lib/database.types"
@@ -43,6 +45,23 @@ export type PlayerSearchResult = Pick<Tables<"players">, "id" | "first_name" | "
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
 
+const _cachedAssessments = unstable_cache(
+  async (): Promise<AssessmentRow[]> => {
+    const { data } = await serviceClient
+      .from("assessments")
+      .select(`
+        *,
+        players:player_id(id, first_name, last_name, birth_year, position),
+        events:event_id(id, title, start_at),
+        profiles:assessor_id(full_name)
+      `)
+      .order("created_at", { ascending: false })
+    return (data ?? []) as AssessmentRow[]
+  },
+  ["assessments"],
+  { revalidate: 60, tags: ["assessments"] }
+)
+
 export async function listAssessments(filters?: {
   eventId?: string
   birthYear?: number
@@ -50,36 +69,26 @@ export async function listAssessments(filters?: {
   myOnly?: boolean
 }): Promise<AssessmentRow[]> {
   const role = await requireAnyRole()
-  const supabase = await createClient()
 
-  let query = supabase
-    .from("assessments")
-    .select(`
-      *,
-      players:player_id(id, first_name, last_name, birth_year, position),
-      events:event_id(id, title, start_at),
-      profiles:assessor_id(full_name)
-    `)
-    .order("created_at", { ascending: false })
+  let results = await _cachedAssessments()
 
   if (filters?.eventId) {
-    query = query.eq("event_id", filters.eventId)
+    results = results.filter((a) => a.event_id === filters.eventId)
   }
 
   if (filters?.recommendation) {
-    query = query.eq("recommendation", filters.recommendation as AssessmentRecommendation)
+    results = results.filter(
+      (a) => a.recommendation === (filters.recommendation as AssessmentRecommendation)
+    )
   }
 
   if (filters?.myOnly) {
-    const user = await requireAuth()
-    query = query.eq("assessor_id", user.id)
+    const user = await getAuthUser()
+    if (user) {
+      results = results.filter((a) => a.assessor_id === user.id)
+    }
   }
 
-  const { data } = await query
-
-  let results = (data ?? []) as AssessmentRow[]
-
-  // Filter by birth year client-side (requires join)
   if (filters?.birthYear) {
     results = results.filter((a) => a.players?.birth_year === filters.birthYear)
   }
@@ -145,6 +154,7 @@ export async function createAssessment(
     })
   }
 
+  updateTag("assessments")
   return { data, error: error?.message ?? null }
 }
 
@@ -186,6 +196,7 @@ export async function updateAssessment(
 
   const { error } = await supabase.from("assessments").update(updates).eq("id", id)
 
+  updateTag("assessments")
   return { error: error?.message ?? null }
 }
 
@@ -209,6 +220,7 @@ export async function deleteAssessment(id: string): Promise<{ error: string | nu
 
   const { error } = await supabase.from("assessments").delete().eq("id", id)
 
+  updateTag("assessments")
   return { error: error?.message ?? null }
 }
 

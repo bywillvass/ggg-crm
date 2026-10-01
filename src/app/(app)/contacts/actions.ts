@@ -1,5 +1,6 @@
 "use server"
 
+import { unstable_cache, updateTag } from "next/cache"
 import { requireAdmin } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
@@ -12,6 +13,20 @@ export type ContactWithPlayers = Tables<"contacts"> & {
   player_contacts: { player_id: string }[]
 }
 
+const _cachedContacts = unstable_cache(
+  async (): Promise<ContactWithPlayers[]> => {
+    const { data } = await serviceClient
+      .from("contacts")
+      .select("*, player_contacts(player_id)")
+      .is("archived_at", null)
+      .order("last_name", { ascending: true })
+      .order("first_name", { ascending: true })
+    return (data ?? []) as ContactWithPlayers[]
+  },
+  ["contacts"],
+  { revalidate: 60, tags: ["contacts"] }
+)
+
 export async function listContacts(filters?: {
   tags?: string[]
   consent?: string
@@ -22,43 +37,49 @@ export async function listContacts(filters?: {
   archived?: boolean
 }): Promise<ContactWithPlayers[]> {
   await requireAdmin()
-  const supabase = await createClient()
 
-  let query = supabase
-    .from("contacts")
-    .select("*, player_contacts(player_id)")
-    .order("last_name", { ascending: true })
-    .order("first_name", { ascending: true })
+  let results: ContactWithPlayers[]
 
-  if (!filters?.archived) {
-    query = query.is("archived_at", null)
+  if (filters?.archived === true) {
+    // Archived view needs all rows — skip cache
+    const supabase = await createClient()
+    const { data } = await supabase
+      .from("contacts")
+      .select("*, player_contacts(player_id)")
+      .order("last_name", { ascending: true })
+      .order("first_name", { ascending: true })
+    results = (data ?? []) as ContactWithPlayers[]
+  } else {
+    results = await _cachedContacts()
   }
 
   if (filters?.search) {
-    const s = filters.search
-    query = query.or(
-      `first_name.ilike.%${s}%,last_name.ilike.%${s}%,email.ilike.%${s}%,phone.ilike.%${s}%`
+    const s = filters.search.toLowerCase()
+    results = results.filter((c) =>
+      (c.first_name ?? "").toLowerCase().includes(s) ||
+      (c.last_name ?? "").toLowerCase().includes(s) ||
+      (c.email ?? "").toLowerCase().includes(s) ||
+      (c.phone ?? "").toLowerCase().includes(s)
     )
   }
 
   if (filters?.consent) {
-    query = query.eq("marketing_consent", filters.consent as ConsentType)
+    results = results.filter((c) => c.marketing_consent === (filters.consent as ConsentType))
   }
 
   if (filters?.unsubscribed) {
-    query = query.not("unsubscribed_at", "is", null)
+    results = results.filter((c) => c.unsubscribed_at != null)
   }
 
   if (filters?.source) {
-    query = query.eq("source", filters.source as LeadSource)
+    results = results.filter((c) => c.source === (filters.source as LeadSource))
   }
 
   if (filters?.tags?.length) {
-    query = query.overlaps("tags", filters.tags)
+    results = results.filter((c) =>
+      filters.tags!.some((t) => (c.tags ?? []).includes(t))
+    )
   }
-
-  const { data } = await query
-  let results = (data ?? []) as ContactWithPlayers[]
 
   if (filters?.hasPlayers) {
     results = results.filter((c) => c.player_contacts.length > 0)
@@ -110,6 +131,7 @@ export async function createContact(
     .select()
     .single()
 
+  updateTag("contacts")
   return { data, error: error?.message ?? null }
 }
 
@@ -125,6 +147,7 @@ export async function updateContact(
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("contacts")
   return { error: error?.message ?? null }
 }
 
@@ -137,6 +160,7 @@ export async function archiveContact(id: string): Promise<{ error: string | null
     .update({ archived_at: new Date().toISOString() })
     .eq("id", id)
 
+  updateTag("contacts")
   return { error: error?.message ?? null }
 }
 
@@ -166,6 +190,7 @@ export async function mergeContacts(
     .update({ archived_at: new Date().toISOString() })
     .eq("id", duplicateId)
 
+  updateTag("contacts")
   return { error: null }
 }
 
@@ -192,6 +217,7 @@ export async function addTagToContact(
     .update({ tags: [...tags, tag] })
     .eq("id", id)
 
+  updateTag("contacts")
   return { error: error?.message ?? null }
 }
 
@@ -215,5 +241,6 @@ export async function removeTagFromContact(
     .update({ tags: (contact.tags ?? []).filter((t) => t !== tag) })
     .eq("id", id)
 
+  updateTag("contacts")
   return { error: error?.message ?? null }
 }

@@ -1,5 +1,6 @@
 "use server"
 
+import { unstable_cache, updateTag } from "next/cache"
 import { requireAdmin } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
@@ -55,14 +56,21 @@ function plainTextToHtml(text: string): string {
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
+const _cachedPosts = unstable_cache(
+  async (): Promise<PostRow[]> => {
+    const { data } = await serviceClient
+      .from("posts")
+      .select("*")
+      .order("created_at", { ascending: false })
+    return (data ?? []) as PostRow[]
+  },
+  ["posts"],
+  { revalidate: 60, tags: ["posts"] }
+)
+
 export async function listPosts(): Promise<PostRow[]> {
   await requireAdmin()
-  const supabase = await createClient()
-  const { data } = await supabase
-    .from("posts")
-    .select("*")
-    .order("created_at", { ascending: false })
-  return (data ?? []) as PostRow[]
+  return _cachedPosts()
 }
 
 export async function getPost(id: string): Promise<PostRow | null> {
@@ -98,6 +106,7 @@ export async function createPost(input: PostInput): Promise<PostRow> {
     body: `Blog post created: "${input.title}"`,
   })
 
+  updateTag("posts")
   return data as PostRow
 }
 
@@ -128,6 +137,7 @@ export async function updatePost(id: string, input: PostInput): Promise<{ error:
     })
   }
 
+  updateTag("posts")
   return { error: error?.message ?? null }
 }
 
@@ -146,6 +156,7 @@ export async function deletePost(id: string): Promise<{ error: string | null }> 
   }
 
   const { error } = await supabase.from("posts").delete().eq("id", id)
+  updateTag("posts")
   return { error: error?.message ?? null }
 }
 
@@ -170,6 +181,7 @@ export async function publishPost(id: string): Promise<{ ok: boolean; error?: st
   const { error } = await supabase.from("posts").update(updates).eq("id", id)
   if (error) return { ok: false, error: error.message }
 
+  updateTag("posts")
   return syncBlogToGitHub()
 }
 
@@ -184,6 +196,7 @@ export async function unpublishPost(id: string): Promise<{ ok: boolean; error?: 
 
   if (error) return { ok: false, error: error.message }
 
+  updateTag("posts")
   return syncBlogToGitHub()
 }
 
@@ -360,6 +373,7 @@ export async function importFromGitHub(): Promise<{ imported: number; skipped: n
     }
 
     if (firstError && imported === 0) return { imported: 0, skipped, error: firstError }
+    updateTag("posts")
     return { imported, skipped }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

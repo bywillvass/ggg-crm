@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Phone, Archive, Edit2, Check, UserPlus, Eye, Trash2, FileText } from "lucide-react"
+import { Phone, Archive, Edit2, Check, UserPlus, Eye, Trash2, FileText, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -36,6 +36,7 @@ import {
   deleteDocument,
   type PlayerDocumentRow,
 } from "@/app/(app)/documents/actions"
+import { DocumentViewer } from "@/components/shared/DocumentViewer"
 import { cn } from "cn"
 import type { Database } from "@/lib/database.types"
 
@@ -95,6 +96,7 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
   const [linkForm, setLinkForm] = useState({ contact_id: "", relationship: "parent", is_primary: false, is_emergency: false })
   const [playerDocs, setPlayerDocs] = useState<PlayerDocumentRow[] | null>(null)
   const fetchingDocsRef = useRef(false)
+  const [viewerDoc, setViewerDoc] = useState<{ url: string; fileName: string; mimeType: string | null } | null>(null)
 
   async function handleSave() {
     setSaving(true)
@@ -187,10 +189,16 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
     }
   }, [activeTab, playerDocs, player.id])
 
-  async function handleViewDoc(filePath: string) {
+  async function handleViewDoc(filePath: string, fileName: string, mimeType: string | null) {
     const { url, error } = await getDocumentSignedUrl(filePath)
     if (error || !url) { toast.error(error ?? "Failed to get URL"); return }
-    window.open(url, "_blank")
+    setViewerDoc({ url, fileName, mimeType })
+  }
+
+  async function handleDownloadAllPlayerDocs() {
+    const a = document.createElement("a")
+    a.href = `/api/documents/download?playerId=${player.id}`
+    a.click()
   }
 
   async function handleDeleteDoc(docId: string) {
@@ -469,6 +477,22 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
 
       {activeTab === "Documents" && (
         <div className="space-y-3">
+          {viewerDoc && (
+            <DocumentViewer
+              url={viewerDoc.url}
+              fileName={viewerDoc.fileName}
+              mimeType={viewerDoc.mimeType}
+              onClose={() => setViewerDoc(null)}
+            />
+          )}
+          {playerDocs !== null && playerDocs.length > 0 && (
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={handleDownloadAllPlayerDocs}>
+                <Download className="h-3.5 w-3.5 mr-1.5" />
+                Download all
+              </Button>
+            </div>
+          )}
           {playerDocs === null ? (
             <p className="text-sm text-gray-400 py-4 text-center">Loading…</p>
           ) : playerDocs.length === 0 ? (
@@ -503,7 +527,7 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            onClick={() => handleViewDoc(doc.file_path)}
+                            onClick={() => handleViewDoc(doc.file_path, doc.file_name, doc.mime_type)}
                             title="View"
                           >
                             <Eye className="h-3.5 w-3.5" />

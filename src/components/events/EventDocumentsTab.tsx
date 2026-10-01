@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { toast } from "sonner"
-import { Plus, Trash2, Upload, Eye, Send, Check, AlertTriangle, Clock, X } from "lucide-react"
+import { Plus, Trash2, Upload, Eye, Send, Check, AlertTriangle, Clock, X, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import {
@@ -21,6 +21,8 @@ import {
   type DocumentMatrix,
   type DocumentTypeRow,
 } from "@/app/(app)/documents/actions"
+import { DocumentViewer } from "@/components/shared/DocumentViewer"
+
 export function EventDocumentsTab({ eventId }: { eventId: string }) {
   const [matrix, setMatrix] = useState<DocumentMatrix | null>(null)
   const [docTypes, setDocTypes] = useState<DocumentTypeRow[]>([])
@@ -44,6 +46,13 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
   const [requestTokens, setRequestTokens] = useState<{ participantId: string; playerName: string; url: string }[]>([])
   const [showTokens, setShowTokens] = useState(false)
   const [requesting, setRequesting] = useState(false)
+
+  // Document viewer
+  const [viewerDoc, setViewerDoc] = useState<{ url: string; fileName: string; mimeType: string | null } | null>(null)
+
+  // Bulk download filter
+  const [downloadTypeId, setDownloadTypeId] = useState("")
+  const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -95,11 +104,9 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
       const ext = uploadFile.name.split(".").pop() ?? "bin"
       const path = `events/${eventId}/${uploadCell.playerId}/${uploadCell.docTypeId}/${Date.now()}.${ext}`
 
-      // Get presigned upload URL
       const { signedUrl, error: presignErr } = await getAdminUploadPresignedUrl(path)
       if (presignErr || !signedUrl) throw new Error(presignErr ?? "Failed to get upload URL")
 
-      // Upload directly to Supabase Storage
       const res = await fetch(signedUrl, {
         method: "PUT",
         body: uploadFile,
@@ -107,7 +114,6 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
       })
       if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
 
-      // Record in DB
       const { error: recordErr } = await recordDocument({
         player_id: uploadCell.playerId,
         event_id: eventId,
@@ -147,12 +153,12 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
     }
   }
 
-  async function handleView(filePath: string) {
+  async function handleView(filePath: string, fileName: string, mimeType: string | null) {
     const { url, error } = await getDocumentSignedUrl(filePath)
     if (error || !url) {
       toast.error(error ?? "Failed to generate link")
     } else {
-      window.open(url, "_blank")
+      setViewerDoc({ url, fileName, mimeType })
     }
   }
 
@@ -169,13 +175,28 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
     setRequesting(false)
   }
 
-  if (loading) {
-    return <div className="text-center py-12 text-gray-400 text-sm">Loading...</div>
+  async function handleDownloadZip() {
+    setDownloading(true)
+    const params = new URLSearchParams({ eventId })
+    if (downloadTypeId) params.set("docTypeId", downloadTypeId)
+    const res = await fetch(`/api/documents/download?${params}`)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      toast.error(body.error ?? "Download failed")
+      setDownloading(false)
+      return
+    }
+    const blob = await res.blob()
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(blob)
+    a.download = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "documents.zip"
+    a.click()
+    URL.revokeObjectURL(a.href)
+    setDownloading(false)
   }
 
-  if (!matrix) {
-    return <div className="text-center py-12 text-gray-400 text-sm">Error loading documents</div>
-  }
+  if (loading) return <div className="text-center py-12 text-gray-400 text-sm">Loading...</div>
+  if (!matrix) return <div className="text-center py-12 text-gray-400 text-sm">Error loading documents</div>
 
   const unusedTypes = docTypes.filter(
     (dt) => !matrix.requirements.some((r) => r.document_type_id === dt.id)
@@ -185,11 +206,24 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
     matrix.requirements.some((r) => r.required && p.documents[r.document_type_id] === null)
   )
 
+  const hasAnyDocs = matrix.participants.some((p) =>
+    Object.values(p.documents).some(Boolean)
+  )
+
   return (
     <div>
-      {/* Requirement editor */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex flex-wrap gap-2">
+      {viewerDoc && (
+        <DocumentViewer
+          url={viewerDoc.url}
+          fileName={viewerDoc.fileName}
+          mimeType={viewerDoc.mimeType}
+          onClose={() => setViewerDoc(null)}
+        />
+      )}
+
+      {/* Requirement editor + actions */}
+      <div className="flex items-start justify-between gap-3 mb-4 flex-wrap">
+        <div className="flex flex-wrap gap-2 flex-1">
           {matrix.requirements.map((req) => (
             <div
               key={req.document_type_id}
@@ -209,7 +243,32 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
             <span className="text-sm text-gray-400">No document requirements set</span>
           )}
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {hasAnyDocs && (
+            <div className="flex items-center gap-1.5">
+              <select
+                value={downloadTypeId}
+                onChange={(e) => setDownloadTypeId(e.target.value)}
+                className="h-8 rounded-md border border-gray-200 bg-white px-2 text-xs outline-none focus:ring-2 focus:ring-[#C9A227]"
+              >
+                <option value="">All types</option>
+                {matrix.requirements.map((req) => (
+                  <option key={req.document_type_id} value={req.document_type_id}>
+                    {req.document_types.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownloadZip}
+                disabled={downloading}
+              >
+                <Download className="w-4 h-4 mr-1" />
+                {downloading ? "Zipping..." : "Download zip"}
+              </Button>
+            </div>
+          )}
           <Button variant="outline" size="sm" onClick={() => setShowAddReq(true)} disabled={unusedTypes.length === 0}>
             <Plus className="w-4 h-4 mr-1" />Add requirement
           </Button>
@@ -270,7 +329,7 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
                               </span>
                             )}
                             <button
-                              onClick={() => handleView(doc.document_id)}
+                              onClick={() => handleView(doc.file_path, doc.file_name, doc.mime_type)}
                               className="text-gray-400 hover:text-[#0C0F4C] transition-colors"
                               title="View document"
                             >
@@ -288,14 +347,12 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
                           <div className="flex items-center justify-center">
                             {req.required ? (
                               <button
-                                onClick={() => {
-                                  setUploadCell({
-                                    participantId: participant.participant_id,
-                                    playerId: participant.player_id,
-                                    docTypeId: req.document_type_id,
-                                    playerName: participant.player_name,
-                                  })
-                                }}
+                                onClick={() => setUploadCell({
+                                  participantId: participant.participant_id,
+                                  playerId: participant.player_id,
+                                  docTypeId: req.document_type_id,
+                                  playerName: participant.player_name,
+                                })}
                                 className="flex items-center gap-1 text-red-500 hover:text-red-700 transition-colors text-xs"
                                 title="Missing - click to upload"
                               >
@@ -304,14 +361,12 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
                               </button>
                             ) : (
                               <button
-                                onClick={() => {
-                                  setUploadCell({
-                                    participantId: participant.participant_id,
-                                    playerId: participant.player_id,
-                                    docTypeId: req.document_type_id,
-                                    playerName: participant.player_name,
-                                  })
-                                }}
+                                onClick={() => setUploadCell({
+                                  participantId: participant.participant_id,
+                                  playerId: participant.player_id,
+                                  docTypeId: req.document_type_id,
+                                  playerName: participant.player_name,
+                                })}
                                 className="text-gray-300 hover:text-gray-500 transition-colors"
                                 title="Click to upload"
                               >
@@ -338,9 +393,7 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
       {/* Add requirement dialog */}
       <Dialog open={showAddReq} onOpenChange={setShowAddReq}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add document requirement</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Add document requirement</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1">
               <Label>Document type</Label>
@@ -388,13 +441,12 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
       {/* Upload dialog */}
       <Dialog open={!!uploadCell} onOpenChange={(open) => !open && setUploadCell(null)}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Upload document</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Upload document</DialogTitle></DialogHeader>
           {uploadCell && (
             <div className="space-y-4">
               <p className="text-sm text-gray-600">
-                Uploading for <strong>{uploadCell.playerName}</strong>: {matrix?.requirements.find((r) => r.document_type_id === uploadCell.docTypeId)?.document_types.name}
+                Uploading for <strong>{uploadCell.playerName}</strong>:{" "}
+                {matrix?.requirements.find((r) => r.document_type_id === uploadCell.docTypeId)?.document_types.name}
               </p>
               <div className="space-y-1">
                 <Label>File</Label>
@@ -422,11 +474,7 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setUploadCell(null)}>Cancel</Button>
-            <Button
-              onClick={handleUpload}
-              disabled={uploading || !uploadFile}
-              className="bg-[#C9A227] hover:bg-[#b8911f] text-white"
-            >
+            <Button onClick={handleUpload} disabled={uploading || !uploadFile} className="bg-[#C9A227] hover:bg-[#b8911f] text-white">
               {uploading ? "Uploading..." : "Upload"}
             </Button>
           </DialogFooter>
@@ -436,9 +484,7 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
       {/* Request tokens dialog */}
       <Dialog open={showTokens} onOpenChange={setShowTokens}>
         <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Upload links created</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Upload links created</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-gray-600">
               Upload links have been created. Emails are queued and will be sent automatically.
@@ -457,10 +503,7 @@ export function EventDocumentsTab({ eventId }: { eventId: string }) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        navigator.clipboard.writeText(url)
-                        toast.success("Copied")
-                      }}
+                      onClick={() => { navigator.clipboard.writeText(url); toast.success("Copied") }}
                     >
                       Copy
                     </Button>

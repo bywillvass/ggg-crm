@@ -27,7 +27,9 @@ export type MatrixParticipant = {
     string,
     {
       document_id: string
+      file_path: string
       file_name: string
+      mime_type: string | null
       uploaded_via: string
       expires_on: string | null
       expiring_soon: boolean
@@ -119,7 +121,9 @@ export async function getEventDocumentMatrix(eventId: string): Promise<DocumentM
         const expiringSoon = expiresOn && eventEnd ? expiresOn < eventEnd : false
         docMap[req.document_type_id] = {
           document_id: doc.id,
+          file_path: doc.file_path,
           file_name: doc.file_name,
+          mime_type: doc.mime_type,
           uploaded_via: doc.uploaded_via,
           expires_on: doc.expires_on,
           expiring_soon: expiringSoon,

@@ -440,7 +440,8 @@ async function processOneLead(
   }
 
   // Payload source_detail takes precedence over field-mapped campaign value
-  const sourceDetail = input.source_detail ?? mapped.source_detail ?? null
+  // Treat empty string as null (Apps Script passes '' when no page field is set)
+  const sourceDetail = input.source_detail || mapped.source_detail || null
 
   const { data: leadData, error: leadError } = await serviceClient
     .from('leads')

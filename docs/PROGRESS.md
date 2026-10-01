@@ -443,7 +443,7 @@ Phone numbers normalised to E.164 (AU default) using `libphonenumber-js`.
 - **Newsletter always clears unsubscribed_at**: if someone fills out a newsletter form they are explicitly opting in - clears the previous unsubscribe. If you want to not re-subscribe previously unsubscribed contacts, you can remove the `unsubscribed_at: null` line from `upsertNewsletterContact` in the route.
 - **Player relationship detection**: checks if any parent-specific field (parentname, guardianemail, etc.) was present in the submission. If yes, `relationship = guardian`; if no, `relationship = self`. This handles adult players filling in their own form.
 - **source_detail priority**: payload-level `source_detail` field (set by the Apps Script) takes precedence over the `campaign` field-mapping target. This matches the spec intent (website sets source_detail directly as the page URL; campaign names from Meta form fields use the campaign mapping).
-- **website-Code.gs was written from the spec description**: The user's prompt included a placeholder `[PASTE YOUR CODE.GS HERE]` for the existing script but no actual code was pasted. The script was written from scratch based on the spec description (doPost / doGet / syncBlogToGitHub). Before deploying, compare the sheet-writing logic in `appendSubmission()` with your actual existing script and adjust if needed.
+- **website-Code.gs uses the actual existing script**: The user provided their real Apps Script after the initial build. The file has been updated to match it exactly (ES6 syntax, `doGet` reads from a 'Blog' sheet tab, `syncBlogToGitHub` reads from a 'Blog' tab). One fix was applied: the `external_id` had a timestamp appended (`':' + new Date().getTime()`) which would break idempotency - removed so it is `website:<formType>:<row>` exactly as the spec requires.
 - **No new DB migrations**: all tables (ingest_log, ingest_field_mappings, contacts, players, leads, activities) were created in Part 2.
 
 ---
@@ -452,12 +452,7 @@ Phone numbers normalised to E.164 (AU default) using `libphonenumber-js`.
 
 ### Step 1 - Set up website-Code.gs
 
-IMPORTANT: before doing anything, open your website's current Apps Script and compare it with `integrations/website-Code.gs`. The CRM forwarding logic is complete, but the sheet-writing logic in `appendSubmission()` was written from the spec description. Verify that:
-- The column structure matches what your sheet currently has
-- Any custom tab names or row structure match
-- `doGet` matches how your website currently fetches blog posts
-
-If anything differs, update `website-Code.gs` to match your actual existing behavior, then follow these steps:
+The `website-Code.gs` file matches your actual existing script exactly, with one fix: the `external_id` no longer includes a timestamp (which would have broken idempotency). Everything else is identical to your existing code. Follow these steps:
 
 1. Open your website's Google Sheet.
 2. Go to Extensions -> Apps Script.

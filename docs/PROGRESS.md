@@ -386,3 +386,117 @@ Make sure you have done all steps from Part 2 and Part 3 manual sections (especi
 ### Step 3 - No database migrations needed for Part 4
 
 Part 4 is all UI and server actions using the existing schema from Part 2. No new migrations are required.
+
+---
+
+## Part 5 - Lead ingestion (2026-10-01)
+
+### What was built
+
+**API:**
+- `src/app/api/ingest/route.ts` - POST /api/ingest with the full processing pipeline from spec section 8.2.
+
+Processing pipeline in detail:
+1. Validates `x-ingest-secret` header against `INGEST_SECRET` env var (401 if missing/wrong).
+2. Parses JSON body: `{ leads: [...] }`.
+3. Loads custom `ingest_field_mappings` rows from the DB once per request (shared across all leads in the batch).
+4. For each lead:
+   - **Idempotency**: checks `ingest_log` for the `external_id` - returns `duplicate` if found.
+   - **Normalises** field keys (lowercase, strip non-a-z0-9).
+   - **Maps fields** to targets: custom mappings (form-specific beats global), then built-in defaults.
+   - **Newsletter** form type: upserts the contact with `marketing_consent = 'express'`, adds tag `newsletter`, clears `unsubscribed_at` (explicit re-subscribe), logs a note activity, writes `ingest_log`. No lead row created.
+   - **All other forms**: finds or creates a contact (match by email first, then phone; fills empty fields only, never overwrites). Finds or creates a player and links to the contact if player fields are present (match by first name + birth year; `relationship = guardian` if parent-specific field detected, else `self`). Creates a lead row with stage `new`. Logs `lead_created` activity. Writes `ingest_log` with status `created` (new contact) or `merged` (existing contact).
+   - Errors are caught per-lead: the batch continues, the error is written to `ingest_log` with status `error`.
+
+Phone numbers normalised to E.164 (AU default) using `libphonenumber-js`.
+
+**Integration scripts:**
+- `integrations/website-Code.gs` - full replacement for the website Apps Script:
+  - `doPost`: honeypot (`company` field), formType routing, appends to sheet tab by formType, forwards to CRM with `external_id = website:<formType>:<row>`, source `website`.
+  - `doGet`: fetches and returns `blog-posts.json` from GitHub for the website's blog section.
+  - `syncBlogToGitHub`: reads from a "BlogPosts" sheet tab and commits to GitHub. Keep this function but delete its trigger once the CRM blog (Part 10) goes live.
+  - Reads `CRM_INGEST_URL` and `CRM_INGEST_SECRET` from Script Properties. CRM forward is wrapped in its own try/catch so failures never break the sheet write or the website response. Uses `muteHttpExceptions: true`.
+- `integrations/meta-sheet-sync.gs` - bound to the Meta leads Google Sheet:
+  - `syncNewLeads()`: reads new rows per tab, posts in batches of 50 to `/api/ingest`, advances row pointer only on success. Skips tabs starting with `_`.
+  - `backfillAll()`: resets all row pointers and resends everything.
+  - `setupTrigger()`: creates a 5-minute time-driven trigger (removes duplicates first).
+  - Uses `external_id = meta:<id column value>` or `metasheet:<tab>:<row>`.
+- `integrations/README.md` - exact setup steps for both scripts.
+
+**Settings and status (already built in Part 3, fully wired):**
+- `FieldMappingsSettings.tsx` - UI to add/edit/delete `ingest_field_mappings` rows. Works via Part 3 server actions.
+- `IntegrationsStatus.tsx` - shows last received timestamp per source and recent errors from `ingest_log`. Data from `getIntegrationsStatus()` in settings/actions.ts.
+
+### Files created/modified
+
+**New files:**
+- src/app/api/ingest/route.ts
+- integrations/website-Code.gs
+- integrations/meta-sheet-sync.gs
+- integrations/README.md
+
+**No files modified** (Settings mapping UI and integration status panel were fully built in Part 3 and require no changes.)
+
+### Decisions made
+
+- **newsletter form type check is case-insensitive** (`formType?.toLowerCase() === 'newsletter'`). Any capitalisation works.
+- **Newsletter always clears unsubscribed_at**: if someone fills out a newsletter form they are explicitly opting in - clears the previous unsubscribe. If you want to not re-subscribe previously unsubscribed contacts, you can remove the `unsubscribed_at: null` line from `upsertNewsletterContact` in the route.
+- **Player relationship detection**: checks if any parent-specific field (parentname, guardianemail, etc.) was present in the submission. If yes, `relationship = guardian`; if no, `relationship = self`. This handles adult players filling in their own form.
+- **source_detail priority**: payload-level `source_detail` field (set by the Apps Script) takes precedence over the `campaign` field-mapping target. This matches the spec intent (website sets source_detail directly as the page URL; campaign names from Meta form fields use the campaign mapping).
+- **website-Code.gs was written from the spec description**: The user's prompt included a placeholder `[PASTE YOUR CODE.GS HERE]` for the existing script but no actual code was pasted. The script was written from scratch based on the spec description (doPost / doGet / syncBlogToGitHub). Before deploying, compare the sheet-writing logic in `appendSubmission()` with your actual existing script and adjust if needed.
+- **No new DB migrations**: all tables (ingest_log, ingest_field_mappings, contacts, players, leads, activities) were created in Part 2.
+
+---
+
+## Manual steps Will must do BEFORE the next Part (Part 6 - Events)
+
+### Step 1 - Set up website-Code.gs
+
+IMPORTANT: before doing anything, open your website's current Apps Script and compare it with `integrations/website-Code.gs`. The CRM forwarding logic is complete, but the sheet-writing logic in `appendSubmission()` was written from the spec description. Verify that:
+- The column structure matches what your sheet currently has
+- Any custom tab names or row structure match
+- `doGet` matches how your website currently fetches blog posts
+
+If anything differs, update `website-Code.gs` to match your actual existing behavior, then follow these steps:
+
+1. Open your website's Google Sheet.
+2. Go to Extensions -> Apps Script.
+3. Replace the Code.gs contents with the contents of `integrations/website-Code.gs`.
+4. Go to Project Settings (gear icon) -> Script properties. Add:
+   - `CRM_INGEST_URL` = `https://crm.gingaglobalgroup.com/api/ingest`
+   - `CRM_INGEST_SECRET` = your `INGEST_SECRET` from `.env.local`
+   - `GITHUB_TOKEN` = your GitHub personal access token (repo scope)
+   - `GITHUB_REPO` = `bywillvass/ginga-global-group-site`
+   - `GITHUB_BLOG_FILE` = `blog-posts.json`
+   - `GITHUB_BRANCH` = `main`
+5. Click Deploy -> Manage deployments.
+6. Click the pencil icon next to your existing deployment.
+7. Under Version, choose "New version" (NOT a new deployment - the URL must stay the same).
+8. Click Deploy.
+9. Test by submitting one of your website forms and checking that a new lead appears in the CRM at https://crm.gingaglobalgroup.com/leads.
+
+### Step 2 - Set up meta-sheet-sync.gs
+
+1. Open the Google Sheet that receives Meta instant form leads.
+2. Go to Extensions -> Apps Script.
+3. Click + next to Files, name the new file `meta-sheet-sync`.
+4. Paste the contents of `integrations/meta-sheet-sync.gs`.
+5. Go to Project Settings -> Script properties. Add the same `CRM_INGEST_URL` and `CRM_INGEST_SECRET` as above.
+6. In the function dropdown, select `setupTrigger` and click Run. Approve the permissions popup.
+7. To send all existing rows now: select `backfillAll` and click Run.
+
+### Step 3 - Verify the ingest API directly (optional)
+
+1. From your terminal, run:
+   ```
+   curl -X POST https://crm.gingaglobalgroup.com/api/ingest \
+     -H "x-ingest-secret: <your INGEST_SECRET>" \
+     -H "Content-Type: application/json" \
+     -d '{"leads":[{"external_id":"test:001","source":"website","form_type":"Test","fields":{"Parent Name":"Test Parent","Email":"test@example.com","Player Name":"Test Player","Birth Year":"2012"}}]}'
+   ```
+2. You should get `{"ok":true,"results":[{"external_id":"test:001","status":"created",...}]}`.
+3. Check the CRM at /leads to see the new lead, and /contacts for the new contact.
+
+### Step 4 - No database migrations needed for Part 5
+
+All tables were created in Part 2. No new migrations are required.

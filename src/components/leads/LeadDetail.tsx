@@ -263,6 +263,24 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
 
       {activeTab === "Summary" && (
         <div className="space-y-4">
+          {/* Form message — pulled from raw submission */}
+          {(() => {
+            const MESSAGE_KEYS = ["message", "comments", "enquiry", "notes", "comment", "question", "body", "Message", "Comments", "Enquiry"]
+            const raw = lead.raw as Record<string, unknown> | null
+            const message = raw
+              ? (MESSAGE_KEYS.map((k) => raw[k]).find((v) => typeof v === "string" && v.trim()) as string | undefined)
+              : (lead.contacts?.notes ?? undefined)
+            if (!message) return null
+            return (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">
+                  {lead.form_type === "contact" ? "Contact message" : lead.form_type === "eoi" ? "Expression of interest" : "Form message"}
+                </p>
+                <p className="text-sm text-gray-800 whitespace-pre-wrap">{message}</p>
+              </div>
+            )
+          })()}
+
           <div className="rounded-lg border bg-white p-4">
             <div className="flex items-center justify-between mb-3">
               <p className="text-sm font-semibold text-gray-600">Lead details</p>
@@ -288,9 +306,16 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
               </div>
             ) : (
               <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-                <div><dt className="text-gray-500">Source</dt><dd className="font-medium">{lead.source.replace("_", " ")}</dd></div>
-                <div><dt className="text-gray-500">Stage</dt><dd><Badge variant={stageBadge(lead.stage)}>{lead.stage.replace("_", " ")}</Badge></dd></div>
-                <div><dt className="text-gray-500">Form type</dt><dd className="font-medium">{lead.form_type ?? "-"}</dd></div>
+                <div><dt className="text-gray-500">Source</dt><dd className="font-medium capitalize">{lead.source.replace(/_/g, " ")}</dd></div>
+                <div><dt className="text-gray-500">Stage</dt><dd><Badge variant={stageBadge(lead.stage)}>{lead.stage.replace(/_/g, " ")}</Badge></dd></div>
+                <div>
+                  <dt className="text-gray-500">Form type</dt>
+                  <dd>
+                    {lead.form_type
+                      ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-[#0C0F4C]/10 text-[#0C0F4C] border border-[#0C0F4C]/20">{lead.form_type}</span>
+                      : <span className="text-gray-400">—</span>}
+                  </dd>
+                </div>
                 <div><dt className="text-gray-500">Owner</dt><dd className="font-medium">{lead.profiles?.full_name ?? "Unassigned"}</dd></div>
                 <div><dt className="text-gray-500">Submitted</dt><dd className="font-medium">{format(new Date(lead.created_at), "d MMM yyyy h:mm aa")}</dd></div>
                 {lead.next_follow_up_at && (

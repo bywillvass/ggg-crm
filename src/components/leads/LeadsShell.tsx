@@ -177,6 +177,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const [filterSource, setFilterSource] = useState("")
   const [filterStage, setFilterStage] = useState("")
   const [filterOwner, setFilterOwner] = useState("")
+  const [filterFormType, setFilterFormType] = useState("")
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [activeDrag, setActiveDrag] = useState<LeadWithRelations | null>(null)
@@ -209,6 +210,15 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     return SOURCES.filter((s) => (counts[s] ?? 0) > 0).map((s) => ({ source: s, count: counts[s] ?? 0 }))
   }, [leads])
 
+  const formTypeBreakdown = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const l of leads) {
+      const ft = l.form_type ?? "unknown"
+      counts[ft] = (counts[ft] ?? 0) + 1
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])
+  }, [leads])
+
   const stageCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const l of leads) counts[l.stage] = (counts[l.stage] ?? 0) + 1
@@ -239,6 +249,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     if (filterSource) result = result.filter((l) => l.source === filterSource)
     if (filterStage) result = result.filter((l) => l.stage === filterStage)
     if (filterOwner) result = result.filter((l) => l.owner_id === filterOwner)
+    if (filterFormType) result = result.filter((l) => (l.form_type ?? "unknown") === filterFormType)
     return result
   }, [leads, search, filterSource, filterStage, filterOwner])
 
@@ -254,27 +265,19 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   function drillIntoSource(source: string) {
-    setFilterSource(source)
-    setFilterStage("")
-    setSearch("")
-    setPage(1)
-    setView("table")
+    setFilterSource(source); setFilterStage(""); setFilterFormType(""); setSearch(""); setPage(1); setView("table")
   }
 
   function drillIntoStage(stage: string) {
-    setFilterStage(stage)
-    setFilterSource("")
-    setSearch("")
-    setPage(1)
-    setView("table")
+    setFilterStage(stage); setFilterSource(""); setFilterFormType(""); setSearch(""); setPage(1); setView("table")
+  }
+
+  function drillIntoFormType(ft: string) {
+    setFilterFormType(ft); setFilterSource(""); setFilterStage(""); setSearch(""); setPage(1); setView("table")
   }
 
   function goToOverview() {
-    setFilterSource("")
-    setFilterStage("")
-    setSearch("")
-    setPage(1)
-    setView("overview")
+    setFilterSource(""); setFilterStage(""); setFilterFormType(""); setSearch(""); setPage(1); setView("overview")
   }
 
   // Kanban drag
@@ -364,6 +367,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
 
   const activeFilterLabel = filterSource ? SOURCE_LABELS[filterSource] ?? filterSource
     : filterStage ? STAGE_LABELS[filterStage] ?? filterStage
+    : filterFormType ? filterFormType
     : null
 
   return (
@@ -472,6 +476,28 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
               </div>
             )}
 
+            {/* Form type breakdown */}
+            {formTypeBreakdown.length > 1 && (
+              <div>
+                <h2 className="text-sm font-semibold text-gray-700 mb-3">By Form Type</h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {formTypeBreakdown.map(([ft, count]) => (
+                    <button
+                      key={ft}
+                      onClick={() => drillIntoFormType(ft)}
+                      className="group flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 hover:border-[#0C0F4C] hover:shadow-sm transition-all text-left"
+                    >
+                      <div>
+                        <p className="font-semibold text-lg leading-none text-[#0C0F4C]">{count}</p>
+                        <p className="text-xs mt-1 text-gray-500 capitalize">{ft === "unknown" ? "No form type" : ft.replace(/_/g, " ")}</p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 opacity-40 group-hover:opacity-80 transition-opacity" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Recent leads */}
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -557,6 +583,12 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                 <option value="">All owners</option>
                 {profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
               </select>
+              {formTypeBreakdown.length > 1 && (
+                <select value={filterFormType} onChange={(e) => { setFilterFormType(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                  <option value="">All form types</option>
+                  {formTypeBreakdown.map(([ft]) => <option key={ft} value={ft}>{ft === "unknown" ? "No form type" : ft.replace(/_/g, " ")}</option>)}
+                </select>
+              )}
               <span className="self-center text-sm text-gray-400">{filtered.length.toLocaleString()} leads</span>
             </div>
 

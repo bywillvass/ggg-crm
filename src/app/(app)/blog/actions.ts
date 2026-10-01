@@ -328,19 +328,19 @@ export async function importFromGitHub(): Promise<{ imported: number; skipped: n
     }>
 
     // 2. Get existing slugs
-    const supabase = await createClient()
-    const { data: existing } = await supabase.from("posts").select("slug")
+    const { data: existing } = await serviceClient.from("posts").select("slug")
     const existingSlugs = new Set((existing ?? []).map((p) => p.slug))
 
     // 3. Import posts not already in DB
     let imported = 0
     let skipped = 0
+    let firstError: string | undefined
     for (const post of jsonArray) {
       if (!post.Published) continue
       if (existingSlugs.has(post.Slug)) { skipped++; continue }
 
       const insert: TablesInsert<"posts"> = {
-        title: post.Title,
+        title: post.Title.trim(),
         slug: post.Slug,
         category: post.Tag || "News",
         tags: post.Series ? [post.Series] : [],
@@ -351,10 +351,15 @@ export async function importFromGitHub(): Promise<{ imported: number; skipped: n
         published_at: post.Date ? new Date(post.Date).toISOString() : new Date().toISOString(),
       }
 
-      const { error } = await supabase.from("posts").insert(insert)
-      if (!error) imported++
+      const { error } = await serviceClient.from("posts").insert(insert)
+      if (error) {
+        firstError ??= `Insert failed for "${post.Slug}": ${error.message}`
+      } else {
+        imported++
+      }
     }
 
+    if (firstError && imported === 0) return { imported: 0, skipped, error: firstError }
     return { imported, skipped }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

@@ -30,6 +30,7 @@ import {
 import { EventParticipantsTab } from "./EventParticipantsTab"
 import { EventCheckInTab } from "./EventCheckInTab"
 import { EventLogisticsTab } from "./EventLogisticsTab"
+import { EventDocumentsTab } from "./EventDocumentsTab"
 import type { Database, Tables } from "@/lib/database.types"
 
 type EventType = Database["public"]["Enums"]["event_type"]
@@ -408,9 +409,7 @@ export function EventDetail({
       )}
 
       {tab === "documents" && (
-        <div className="text-center py-16 text-gray-400">
-          <p className="text-sm">Documents - coming in Part 7</p>
-        </div>
+        <EventDocumentsTab eventId={event.id} />
       )}
 
       {tab === "assessments" && (

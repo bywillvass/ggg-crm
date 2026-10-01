@@ -582,3 +582,123 @@ Make sure all steps from Parts 2, 3, 4, and 5 are done.
 ### Step 3 - No database migrations needed for Part 6
 
 All tables were created in Part 2. No new migrations are required.
+
+---
+
+## Part 7 - Documents (2026-10-01)
+
+### What was built
+
+**Token utilities** (`src/lib/tokens.ts`):
+- `signToken(payload, expiresIn)` - signs HS256 JWT using `TOKEN_SIGNING_SECRET` env var
+- `verifyToken<T>(token)` - verifies and decodes JWT, returns null on failure
+- `hashToken(token)` - SHA-256 hex hash of token (for DB storage)
+
+**Server actions** (`src/app/(app)/documents/actions.ts`):
+- `getEventDocumentMatrix(eventId)` - returns requirements array + participants matrix. Each participant has a `documents` record keyed by `document_type_id`: null (missing) or `{ document_id, file_name, uploaded_via, expires_on, expiring_soon }`. `expiring_soon` is true when `expires_on < event.end_at`.
+- `addRequirement / removeRequirement` - manage `event_document_requirements`
+- `listDocumentTypes` - all document types ordered by name
+- `recordDocument` - inserts document, auto-sets `delete_after` for sensitive types (`event.end_at + retention_days_after_event`)
+- `deleteDocument` - removes file from Supabase Storage + deletes DB row
+- `getDocumentSignedUrl` - service role `createSignedUrl(path, 60)` - 60 second expiry
+- `getAdminUploadPresignedUrl` - service role `createSignedUploadUrl` for admin browser uploads
+- `getPlayerDocuments` - all documents for a player with event and document type info, ordered newest first
+- `requestMissingDocuments(eventId)` - for each participant with missing required docs: signs JWT, hashes it, upserts `document_request_tokens` row, queues `email_messages` row (status='queued', Part 9 will send them), logs `document_requested` activity. Returns `{ tokens, error }`.
+
+**Event documents tab** (`src/components/events/EventDocumentsTab.tsx`):
+- Loads matrix + doc types on mount
+- Requirements displayed as removable chips (X button removes requirement)
+- "Add requirement" button opens dialog with type select + required checkbox + notes
+- Matrix table: rows are participants, columns are requirement types
+  - Green check + eye + trash = uploaded (admin can view + delete)
+  - Amber clock = expiring before event end
+  - Red warning = missing required (shows upload icon for admin)
+  - Gray upload = missing optional
+- Upload flow: `getAdminUploadPresignedUrl` → `PUT` signedUrl (browser direct upload to Supabase S3) → `recordDocument`
+- View: `getDocumentSignedUrl` → opens in new tab
+- "Request missing" button → `requestMissingDocuments` → shows copyable upload links dialog
+
+**Public upload page** (`src/app/upload/[token]/page.tsx` + `UploadShell.tsx`):
+- Server-rendered page validates JWT + token row (not revoked, not expired, used_count < 100)
+- Fetches participant's event + player info, requirements, and already-uploaded doc type IDs
+- Branded header: navy + gold "Ginga Global Group" + Document Upload
+- Player + event info card
+- Per-requirement upload rows: file input (accepts PDF/JPG/PNG/HEIC, max 15MB)
+- Three-step upload: `POST /api/upload/presign` → `PUT` signedUrl → `POST /api/upload/confirm`
+- Green check + "Received - thank you" state once uploaded per doc
+- "Done - all documents submitted" button when all required docs uploaded → success screen
+
+**API routes (public, token-gated)**:
+- `POST /api/upload/presign` - verifies JWT + token row, builds storage path, returns `{ signedUrl, path }` from `createSignedUploadUrl`
+- `POST /api/upload/confirm` - verifies JWT + token row, computes `delete_after` for sensitive types, inserts `documents` row with `uploaded_via: "parent_link"`, increments `used_count`, logs activity
+
+**Player documents tab** (`src/components/players/PlayerDetail.tsx` updated):
+- Added "Documents" tab to player detail (between Events and Assessments)
+- Lazy loads documents on first tab visit via `getPlayerDocuments`
+- Groups documents by event with event title + date header
+- Each document: file icon, file name, type name, view button (opens signed URL), delete button
+- Delete removes from both Storage and DB
+
+### Files created/modified
+
+**New files:**
+- src/lib/tokens.ts
+- src/app/(app)/documents/actions.ts
+- src/components/events/EventDocumentsTab.tsx
+- src/app/upload/[token]/page.tsx
+- src/app/upload/[token]/UploadShell.tsx
+- src/app/api/upload/presign/route.ts
+- src/app/api/upload/confirm/route.ts
+
+**Modified files:**
+- src/components/events/EventDetail.tsx - Documents tab wired to `<EventDocumentsTab>`
+- src/components/players/PlayerDetail.tsx - Documents tab added with lazy load + view/delete
+
+### Decisions made
+
+- **Browser-direct upload via presigned URLs**: Files go from browser → Supabase Storage (S3) directly, never through the Next.js server function. Avoids Vercel Hobby plan's 4.5MB serverless body limit.
+- **Token hash stored in DB, not raw JWT**: `document_request_tokens.token_hash` stores SHA-256(token). The raw JWT is only ever in URLs. This prevents token exposure from a DB breach.
+- **used_count rate limit (max 100)**: Each token can confirm up to 100 uploads. Prevents runaway usage while allowing the family to upload multiple doc versions.
+- **Email queued, not sent**: `requestMissingDocuments` creates `email_messages` rows with `status = 'queued'`. Part 9 builds the email processor that will send them via Resend.
+- **No new DB migrations**: All tables (documents, document_request_tokens, email_messages, document_types, event_document_requirements) were created in Part 2.
+- **verifyToken constraint relaxed to `object`**: Changed `T extends Record<string, unknown>` to `T extends object` so named interfaces like `TokenPayload` can be passed as the generic.
+
+---
+
+## Manual steps Will must do BEFORE the next Part (Part 8)
+
+### Step 1 - Add TOKEN_SIGNING_SECRET to .env.local and Vercel
+
+1. Generate a secret (e.g. `openssl rand -hex 32`)
+2. Add to `.env.local`: `TOKEN_SIGNING_SECRET=<your_secret>`
+3. In Vercel project Settings → Environment Variables, add `TOKEN_SIGNING_SECRET=<your_secret>`
+4. Redeploy (or it will pick up on next deploy)
+
+### Step 2 - Create the Supabase Storage "documents" bucket (if not already done in Part 2)
+
+1. Go to: https://supabase.com/dashboard/project/iaigtvfdteagnvkljvcq/storage/buckets
+2. Confirm the "documents" bucket exists and is set to Private
+3. If not, create it: name `documents`, toggle Private, set 15MB file size limit
+
+### Step 3 - Test the Event Documents tab
+
+1. Start the dev server: `npm run dev`
+2. Go to an event: http://localhost:3000/events/[event-id]
+3. Click the "Documents" tab
+4. Add a requirement (e.g. "Passport", required)
+5. Upload a file using the upload icon in the matrix
+6. Verify the green check and eye/trash icons appear
+7. Click the eye icon to view the file (should open signed URL in new tab)
+8. Click "Request missing" to generate upload links for participants with missing docs
+
+### Step 4 - Test the public upload page
+
+1. From Step 3's "Request missing", copy one of the generated upload links
+2. Open it in an incognito browser window (not logged in to the CRM)
+3. Verify the page shows the player name and event correctly
+4. Upload a test document
+5. Verify the green check appears and the file is visible in the CRM event documents tab
+
+### Step 5 - No database migrations needed for Part 7
+
+All tables were created in Part 2. No new migrations are required.

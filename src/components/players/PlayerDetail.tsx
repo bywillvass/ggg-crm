@@ -1,11 +1,11 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Phone, Archive, Edit2, Check, UserPlus } from "lucide-react"
+import { Phone, Archive, Edit2, Check, UserPlus, Eye, Trash2, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -30,12 +30,18 @@ import {
   type PlayerDetail as PlayerDetailType,
 } from "@/app/(app)/players/actions"
 import { completeTask, deleteTask } from "@/app/(app)/tasks/actions"
+import {
+  getPlayerDocuments,
+  getDocumentSignedUrl,
+  deleteDocument,
+  type PlayerDocumentRow,
+} from "@/app/(app)/documents/actions"
 import { cn } from "cn"
 import type { Database } from "@/lib/database.types"
 
 type AssessmentRec = Database["public"]["Enums"]["assessment_recommendation"]
 
-const TABS = ["Profile", "Guardians", "Events", "Assessments", "Timeline", "Tasks"] as const
+const TABS = ["Profile", "Guardians", "Events", "Documents", "Assessments", "Timeline", "Tasks"] as const
 type Tab = (typeof TABS)[number]
 
 function recBadge(rec: AssessmentRec | null) {
@@ -87,6 +93,8 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
   const [addTaskOpen, setAddTaskOpen] = useState(false)
   const [linkGuardianOpen, setLinkGuardianOpen] = useState(false)
   const [linkForm, setLinkForm] = useState({ contact_id: "", relationship: "parent", is_primary: false, is_emergency: false })
+  const [playerDocs, setPlayerDocs] = useState<PlayerDocumentRow[] | null>(null)
+  const fetchingDocsRef = useRef(false)
 
   async function handleSave() {
     setSaving(true)
@@ -168,6 +176,29 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
     const result = await deleteTask(id)
     if (result.error) toast.error(result.error)
     else router.refresh()
+  }
+
+  useEffect(() => {
+    if (activeTab === "Documents" && playerDocs === null && !fetchingDocsRef.current) {
+      fetchingDocsRef.current = true
+      getPlayerDocuments(player.id)
+        .then((docs) => setPlayerDocs(docs))
+        .catch(() => setPlayerDocs([]))
+    }
+  }, [activeTab, playerDocs, player.id])
+
+  async function handleViewDoc(filePath: string) {
+    const { url, error } = await getDocumentSignedUrl(filePath)
+    if (error || !url) { toast.error(error ?? "Failed to get URL"); return }
+    window.open(url, "_blank")
+  }
+
+  async function handleDeleteDoc(docId: string) {
+    if (!confirm("Delete this document?")) return
+    const { error } = await deleteDocument(docId)
+    if (error) { toast.error(error); return }
+    toast.success("Document deleted")
+    setPlayerDocs((prev) => prev?.filter((d) => d.id !== docId) ?? null)
   }
 
   const initials = `${(player.first_name ?? "?")[0]}${(player.last_name ?? "?")[0]}`.toUpperCase()
@@ -432,6 +463,67 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
                 <Badge variant={participantBadge(ep.status)}>{ep.status}</Badge>
               </div>
             ))
+          )}
+        </div>
+      )}
+
+      {activeTab === "Documents" && (
+        <div className="space-y-3">
+          {playerDocs === null ? (
+            <p className="text-sm text-gray-400 py-4 text-center">Loading…</p>
+          ) : playerDocs.length === 0 ? (
+            <p className="text-sm text-gray-400 py-4 text-center">No documents on file</p>
+          ) : (
+            (() => {
+              const groups = playerDocs.reduce<Record<string, { event: PlayerDocumentRow["events"]; docs: PlayerDocumentRow[] }>>(
+                (acc, doc) => {
+                  const key = doc.event_id ?? "_none"
+                  if (!acc[key]) acc[key] = { event: doc.events, docs: [] }
+                  acc[key].docs.push(doc)
+                  return acc
+                },
+                {}
+              )
+              return Object.entries(groups).map(([key, group]) => (
+                <div key={key} className="rounded-lg border bg-white overflow-hidden">
+                  <div className="px-3 py-2 bg-gray-50 border-b text-xs font-medium text-gray-600 uppercase tracking-wider">
+                    {group.event
+                      ? `${group.event.title} · ${format(new Date(group.event.start_at), "d MMM yyyy")}`
+                      : "No event"}
+                  </div>
+                  <div className="divide-y">
+                    {group.docs.map((doc) => (
+                      <div key={doc.id} className="flex items-center gap-3 px-3 py-2.5">
+                        <FileText className="h-4 w-4 text-gray-400 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{doc.file_name}</p>
+                          <p className="text-xs text-gray-500">{doc.document_types.name}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => handleViewDoc(doc.file_path)}
+                            title="View"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => handleDeleteDoc(doc.id)}
+                            className="text-gray-400 hover:text-red-500"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            })()
           )}
         </div>
       )}

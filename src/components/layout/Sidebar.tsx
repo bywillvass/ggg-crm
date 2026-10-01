@@ -54,11 +54,12 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
 
   return (
     <div className="flex flex-col h-full bg-[#0C0F4C] w-64">
-      <div className="px-5 py-6 border-b border-white/10">
-        <div className="text-lg font-bold text-[#C9A227] leading-tight tracking-tight">
-          Ginga Global Group
-        </div>
-        <div className="text-xs text-white/50 mt-0.5">CRM</div>
+      <div className="px-5 py-5 border-b border-white/10">
+        <img
+          src="/GGG-logo-crm.png"
+          alt="Ginga Global Group"
+          className="h-10 w-auto object-contain"
+        />
       </div>
 
       <nav className="flex-1 overflow-y-auto py-4 px-3">

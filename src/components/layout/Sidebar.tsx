@@ -55,11 +55,13 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   return (
     <div className="flex flex-col h-full bg-[#0C0F4C] w-64">
       <div className="px-5 py-5 border-b border-white/10">
-        <img
-          src="/GGG-logo-crm.png"
-          alt="Ginga Global Group"
-          className="h-16 w-auto object-contain"
-        />
+        <Link href="/dashboard">
+          <img
+            src="/GGG-logo-crm.png"
+            alt="Ginga Global Group"
+            className="h-16 w-auto object-contain"
+          />
+        </Link>
       </div>
 
       <nav className="flex-1 overflow-y-auto py-4 px-3">

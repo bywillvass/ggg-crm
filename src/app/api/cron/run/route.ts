@@ -10,7 +10,15 @@ import { resolveAudienceServer } from "@/lib/email/audience"
 
 export const dynamic = "force-dynamic"
 
+export async function POST(request: NextRequest) {
+  return handler(request)
+}
+
 export async function GET(request: NextRequest) {
+  return handler(request)
+}
+
+async function handler(request: NextRequest) {
   const secretHeader = request.headers.get("x-cron-secret")
   const expected = process.env.CRON_SECRET
   if (!expected || secretHeader !== expected) {

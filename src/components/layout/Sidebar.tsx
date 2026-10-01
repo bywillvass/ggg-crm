@@ -58,7 +58,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
         <img
           src="/GGG-logo-crm.png"
           alt="Ginga Global Group"
-          className="h-10 w-auto object-contain"
+          className="h-16 w-auto object-contain"
         />
       </div>
 

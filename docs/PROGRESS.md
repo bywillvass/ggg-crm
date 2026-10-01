@@ -1,5 +1,57 @@
 # GGG CRM - Build Progress
 
+## Part 8 - Assessments (2026-10-01)
+
+### What was built
+
+- Server actions at `src/app/(app)/assessments/actions.ts`:
+  - `listAssessments` with filters (eventId, birthYear, recommendation, myOnly)
+  - `getAssessment` - single assessment with player/event/assessor joins
+  - `createAssessment` - sets assessor_id to current user, logs `assessment_added` activity
+  - `updateAssessment` - coaches can only edit their own; admins can edit any
+  - `deleteAssessment` - same ownership rule as update
+  - `getEventComparison` - all assessments for an event sorted by overall score desc
+  - `bulkAddToEvent` - admin only; adds selected players as "invited" to target event, skips existing
+  - `listEventsForSelect` - non-archived events for dropdowns
+  - `searchPlayersForAssessment` - debounced player search by name
+- Assessments page at `/assessments` (server component + shell)
+- `AssessmentsShell` client component: tabbed (All/My), filters (event, birth year, recommendation), sortable table, add/edit/delete dialogs with player name search autocomplete
+- `EventAssessmentsTab` client component: comparison table sortable by all score columns, add/edit/delete assessment, bulk-add selected players to another event (admin only)
+- Wired `EventAssessmentsTab` into `EventDetail.tsx` replacing the placeholder
+- Updated `PlayerDetail.tsx`: added "Add assessment" button in Assessments tab, dialog pre-filled with player, event select, score fields, recommendation. Added score trend (last 5 overall scores as colored dots).
+
+### Files created
+
+- `src/app/(app)/assessments/actions.ts`
+- `src/app/(app)/assessments/page.tsx`
+- `src/components/assessments/AssessmentsShell.tsx`
+- `src/components/events/EventAssessmentsTab.tsx`
+
+### Files modified
+
+- `src/components/events/EventDetail.tsx` - import and wire EventAssessmentsTab
+- `src/components/players/PlayerDetail.tsx` - add assessment dialog + score trend
+
+### Decisions made
+
+- `requireAnyRole()` defined locally in assessments/actions.ts (same pattern as events/actions.ts; it is not exported from `@/lib/auth/role`)
+- `AssessmentFormInner` is a separate component from `AssessmentFormDialog` to avoid calling setState in useEffect (ESLint react-hooks/set-state-in-effect). The wrapper computes initial state and passes a `key` to reset.
+- Birth year filtering in `listAssessments` is done in JS after the DB query (requires join to players table; Supabase doesn't support filtering on joined columns via the JS client simply)
+- Assessments are fetched fresh in `EventAssessmentsTab` on mount via `getEventComparison`; no SSR props needed
+- The `/assessments` page reloads on save (window.location.reload) since the server component needs to re-fetch; a future optimisation could do optimistic updates
+
+### Manual steps needed
+
+No database migrations needed. All tables from Part 2.
+
+1. Start dev server and test: `npm run dev`
+2. Go to `/assessments` - should show all assessments list with add/edit/delete
+3. Go to an event and click "Assessments" tab - should show comparison table
+4. Go to a player and click "Assessments" tab - should show "Add assessment" button and trend dots
+5. Verify coach access: a coach user should be able to create assessments but only edit/delete their own
+
+---
+
 ## Part 1 - Foundation (2026-10-01)
 
 ### What was built

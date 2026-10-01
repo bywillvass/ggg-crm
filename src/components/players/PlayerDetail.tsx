@@ -37,8 +37,14 @@ import {
   type PlayerDocumentRow,
 } from "@/app/(app)/documents/actions"
 import { DocumentViewer } from "@/components/shared/DocumentViewer"
+import { Select } from "@/components/ui/select"
 import { cn } from "cn"
 import type { Database } from "@/lib/database.types"
+import {
+  createAssessment,
+  listEventsForSelect,
+  type EventSelectItem,
+} from "@/app/(app)/assessments/actions"
 
 type AssessmentRec = Database["public"]["Enums"]["assessment_recommendation"]
 
@@ -97,6 +103,80 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
   const [playerDocs, setPlayerDocs] = useState<PlayerDocumentRow[] | null>(null)
   const fetchingDocsRef = useRef(false)
   const [viewerDoc, setViewerDoc] = useState<{ url: string; fileName: string; mimeType: string | null } | null>(null)
+
+  // Assessment add dialog
+  const [showAddAssessment, setShowAddAssessment] = useState(false)
+  const [assessmentEvents, setAssessmentEvents] = useState<EventSelectItem[]>([])
+  const [assessmentForm, setAssessmentForm] = useState({
+    event_id: "",
+    position_played: "",
+    technical: "",
+    tactical: "",
+    physical: "",
+    mental: "",
+    overall: "",
+    recommendation: "" as AssessmentRec | "",
+    strengths: "",
+    improvements: "",
+    notes: "",
+  })
+  const [savingAssessment, setSavingAssessment] = useState(false)
+  const loadingEventsRef = useRef(false)
+
+  async function openAddAssessment() {
+    if (!loadingEventsRef.current && assessmentEvents.length === 0) {
+      loadingEventsRef.current = true
+      const events = await listEventsForSelect()
+      setAssessmentEvents(events)
+    }
+    setAssessmentForm({
+      event_id: "",
+      position_played: "",
+      technical: "",
+      tactical: "",
+      physical: "",
+      mental: "",
+      overall: "",
+      recommendation: "",
+      strengths: "",
+      improvements: "",
+      notes: "",
+    })
+    setShowAddAssessment(true)
+  }
+
+  function parseScore(val: string): number | null {
+    const n = parseInt(val)
+    if (isNaN(n)) return null
+    return Math.max(1, Math.min(10, n))
+  }
+
+  async function handleSaveAssessment() {
+    if (!assessmentForm.event_id) return toast.error("Select an event")
+    setSavingAssessment(true)
+    const { error } = await createAssessment({
+      player_id: player.id,
+      event_id: assessmentForm.event_id,
+      position_played: assessmentForm.position_played || null,
+      technical: parseScore(assessmentForm.technical),
+      tactical: parseScore(assessmentForm.tactical),
+      physical: parseScore(assessmentForm.physical),
+      mental: parseScore(assessmentForm.mental),
+      overall: parseScore(assessmentForm.overall),
+      recommendation: (assessmentForm.recommendation as AssessmentRec) || null,
+      strengths: assessmentForm.strengths || null,
+      improvements: assessmentForm.improvements || null,
+      notes: assessmentForm.notes || null,
+    })
+    setSavingAssessment(false)
+    if (error) {
+      toast.error(error)
+    } else {
+      toast.success("Assessment saved")
+      setShowAddAssessment(false)
+      router.refresh()
+    }
+  }
 
   async function handleSave() {
     setSaving(true)
@@ -553,28 +633,57 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
       )}
 
       {activeTab === "Assessments" && (
-        <div className="space-y-2">
+        <div className="space-y-4">
+          <Button variant="outline" size="sm" onClick={openAddAssessment}>
+            Add assessment
+          </Button>
+
+          {/* Score trend (last 5 overall scores) */}
+          {player.assessments.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-500 font-medium">Overall trend (recent first):</span>
+              {player.assessments.slice(0, 5).map((a) => {
+                const color =
+                  a.recommendation === "select" ? "bg-green-500 text-white" :
+                  a.recommendation === "monitor" ? "bg-amber-400 text-white" :
+                  a.recommendation === "not_yet" ? "bg-red-400 text-white" :
+                  "bg-gray-200 text-gray-700"
+                return (
+                  <div
+                    key={a.id}
+                    className={cn("w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold", color)}
+                    title={format(new Date(a.created_at), "d MMM yyyy")}
+                  >
+                    {a.overall ?? "?"}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {player.assessments.length === 0 ? (
             <p className="text-sm text-gray-400 py-4 text-center">No assessments</p>
           ) : (
-            player.assessments.map((a) => (
-              <div key={a.id} className="rounded-lg border bg-white p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="font-medium text-sm">{format(new Date(a.created_at), "d MMM yyyy")}</p>
-                  {recBadge(a.recommendation)}
-                </div>
-                {a.overall !== null && (
-                  <div className="flex gap-4 text-xs text-gray-600">
-                    <span>Overall: <strong>{a.overall}</strong></span>
-                    {a.technical !== null && <span>Technical: <strong>{a.technical}</strong></span>}
-                    {a.tactical !== null && <span>Tactical: <strong>{a.tactical}</strong></span>}
-                    {a.physical !== null && <span>Physical: <strong>{a.physical}</strong></span>}
-                    {a.mental !== null && <span>Mental: <strong>{a.mental}</strong></span>}
+            <div className="space-y-2">
+              {player.assessments.map((a) => (
+                <div key={a.id} className="rounded-lg border bg-white p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="font-medium text-sm">{format(new Date(a.created_at), "d MMM yyyy")}</p>
+                    {recBadge(a.recommendation)}
                   </div>
-                )}
-                {a.notes && <p className="text-xs text-gray-500 mt-1">{a.notes}</p>}
-              </div>
-            ))
+                  {a.overall !== null && (
+                    <div className="flex gap-4 text-xs text-gray-600">
+                      <span>Overall: <strong>{a.overall}</strong></span>
+                      {a.technical !== null && <span>Technical: <strong>{a.technical}</strong></span>}
+                      {a.tactical !== null && <span>Tactical: <strong>{a.tactical}</strong></span>}
+                      {a.physical !== null && <span>Physical: <strong>{a.physical}</strong></span>}
+                      {a.mental !== null && <span>Mental: <strong>{a.mental}</strong></span>}
+                    </div>
+                  )}
+                  {a.notes && <p className="text-xs text-gray-500 mt-1">{a.notes}</p>}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -662,6 +771,107 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
               <Button type="submit" className="bg-[#C9A227] hover:bg-[#b8911f] text-white">Link guardian</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add assessment dialog */}
+      <Dialog open={showAddAssessment} onOpenChange={setShowAddAssessment}>
+        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add assessment for {player.first_name} {player.last_name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Event *</Label>
+              <Select
+                value={assessmentForm.event_id}
+                onChange={(e) => setAssessmentForm((f) => ({ ...f, event_id: e.target.value }))}
+              >
+                <option value="">Select event...</option>
+                {assessmentEvents.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.title} {ev.start_at ? `(${format(new Date(ev.start_at), "d MMM yyyy")})` : ""}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Position played</Label>
+              <Input
+                value={assessmentForm.position_played}
+                onChange={(e) => setAssessmentForm((f) => ({ ...f, position_played: e.target.value }))}
+                placeholder="e.g. Striker"
+              />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scores (1–10)</div>
+              <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
+                {(["technical", "tactical", "physical", "mental", "overall"] as const).map((field) => (
+                  <div key={field} className="space-y-1">
+                    <Label className="text-xs capitalize">{field}</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={assessmentForm[field]}
+                      onChange={(e) => setAssessmentForm((f) => ({ ...f, [field]: e.target.value }))}
+                      placeholder="-"
+                      className="text-center"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Recommendation</Label>
+              <Select
+                value={assessmentForm.recommendation}
+                onChange={(e) => setAssessmentForm((f) => ({ ...f, recommendation: e.target.value as AssessmentRec | "" }))}
+              >
+                <option value="">None</option>
+                <option value="select">Select</option>
+                <option value="monitor">Monitor</option>
+                <option value="not_yet">Not yet</option>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Strengths</Label>
+              <Textarea
+                value={assessmentForm.strengths}
+                onChange={(e) => setAssessmentForm((f) => ({ ...f, strengths: e.target.value }))}
+                rows={2}
+                placeholder="Key strengths..."
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Areas for improvement</Label>
+              <Textarea
+                value={assessmentForm.improvements}
+                onChange={(e) => setAssessmentForm((f) => ({ ...f, improvements: e.target.value }))}
+                rows={2}
+                placeholder="Areas to work on..."
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes</Label>
+              <Textarea
+                value={assessmentForm.notes}
+                onChange={(e) => setAssessmentForm((f) => ({ ...f, notes: e.target.value }))}
+                rows={2}
+                placeholder="Additional notes..."
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddAssessment(false)}>Cancel</Button>
+            <Button
+              onClick={handleSaveAssessment}
+              disabled={savingAssessment}
+              className="bg-[#C9A227] hover:bg-[#b8911f] text-white"
+            >
+              {savingAssessment ? "Saving..." : "Save assessment"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

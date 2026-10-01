@@ -418,7 +418,13 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
             player.event_participants.map((ep) => (
               <div key={ep.id} className="flex items-center justify-between rounded-lg border bg-white p-3">
                 <div>
-                  <p className="font-medium text-sm">{ep.events?.title ?? "Unknown event"}</p>
+                  {ep.events ? (
+                    <Link href={`/events/${ep.event_id}`} className="font-medium text-sm text-[#0C0F4C] hover:underline">
+                      {ep.events.title}
+                    </Link>
+                  ) : (
+                    <p className="font-medium text-sm">Unknown event</p>
+                  )}
                   {ep.events?.start_at && (
                     <p className="text-xs text-gray-500">{format(new Date(ep.events.start_at), "d MMM yyyy")}</p>
                   )}

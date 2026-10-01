@@ -495,3 +495,90 @@ The `website-Code.gs` file matches your actual existing script exactly, with one
 ### Step 4 - No database migrations needed for Part 5
 
 All tables were created in Part 2. No new migrations are required.
+
+---
+
+## Part 6 - Events (2026-10-01)
+
+### What was built
+
+**Server actions** (`src/app/(app)/events/actions.ts`):
+- `listEvents` - with filters: type, status, timeframe (upcoming/past/all), search. Accessible by admin and coach.
+- `getEvent` - full event with participants (including player + contact relations), sub-events (separate query to avoid self-referential FK issues), and parent event. Accessible by admin and coach.
+- `createEvent` - admin only, logs activity.
+- `updateEvent` - admin only.
+- `archiveEvent` - admin only.
+- `addParticipant` - add player or contact to event. Auto-waitlists when at capacity. Admin only.
+- `addWalkIn` - create player + contact inline and add as attended. Admin only.
+- `updateParticipantStatus` - admin only, with activity log.
+- `bulkUpdateParticipantStatus` - admin only.
+- `removeParticipant` - admin only.
+- `checkInParticipant` - calls `check_in_participant` RPC (security definer). Accessible by admin and coach.
+- `updateParticipantLogistics` - admin only.
+- `promoteWaitlist` - auto-promotes first waitlisted participant when a slot opens.
+- `searchPlayersForEvent` - search players not already in event.
+- `searchLeadsForEvent` - search leads not already added.
+- `listEmailTemplates` - for reminder template picker.
+
+**Pages:**
+- `/events` - events list (server component, passes data to EventsShell)
+- `/events/[id]` - event detail (server component, passes data to EventDetail)
+
+**Components:**
+- `src/components/events/EventsShell.tsx` - events list with timeframe toggle (upcoming/past/all), search, type and status filters. Card grid showing date, venue, confirmed/capacity, type pill, status badge. New event dialog with all fields.
+- `src/components/events/EventDetail.tsx` - tabbed detail. Admin tabs: Overview, Participants, Check-in, Logistics, Documents (placeholder), Assessments (placeholder), Invoices (placeholder). Coach tabs: Overview, Participants, Check-in, Logistics, Assessments. Edit dialog and archive confirm (admin only). Shows parent event link and sub-events list in Overview.
+- `src/components/events/EventParticipantsTab.tsx` - full participants table with search/status filter. Admin: status dropdown per row, bulk status change, add player (search dialog), add from lead (search dialog), add walk-in (inline form), remove, export CSV. Coach: read-only badges.
+- `src/components/events/EventCheckInTab.tsx` - mobile-first check-in. Live counts (attended/confirmed/total). Search box, big rows with In/Out buttons. Walk-in dialog. Undo button (note: full undo via Participants tab). Works for admin and coach.
+- `src/components/events/EventLogisticsTab.tsx` - logistics/tour mode. Desktop: table with flights, room, shirt, emergency contact, medical alerts. Mobile: card list with emergency tap-to-call, medical alert banner, dietary notes, room. Edit dialog (admin only).
+
+**Player detail update:**
+- Events tab in PlayerDetail now links to event detail pages.
+
+### Files created/modified
+
+**New files:**
+- src/app/(app)/events/actions.ts
+- src/app/(app)/events/page.tsx
+- src/app/(app)/events/[id]/page.tsx
+- src/components/events/EventsShell.tsx
+- src/components/events/EventDetail.tsx
+- src/components/events/EventParticipantsTab.tsx
+- src/components/events/EventCheckInTab.tsx
+- src/components/events/EventLogisticsTab.tsx
+
+**Modified files:**
+- src/components/players/PlayerDetail.tsx - Events tab now links to event detail pages
+
+### Decisions made
+
+- **Self-referential FK for sub-events**: Supabase's PostgREST self-join syntax `events!parent_event_id(*)` is ambiguous for sub-events. Used a separate query to fetch sub-events (where `parent_event_id = event.id`) to avoid this issue. Parent event still uses `parent_event:parent_event_id(*)` which works correctly (follows FK from child to parent).
+- **check_in_participant RPC for all check-ins**: Both admin and coach use the `check_in_participant` RPC (security definer) for check-ins. This enforces the coach restriction at the DB level (can only set attended/no_show).
+- **Undo check-in is UX-only note**: The check-in tab shows an undo button but notes that full undo requires the Participants tab. The RPC only allows attended/no_show - reverting to confirmed is an admin action done via the Participants tab.
+- **Walk-in is immediately "attended"**: Walk-ins created from check-in mode are added with status "attended" and checked_in_at set to now. This matches the real-world use case.
+- **Waitlist auto-promotion**: When a participant is removed or their status changes away from confirmed/attended, `promoteWaitlist` is called to auto-promote the first waitlisted entry (by created_at).
+- **Document requirements for events**: The Documents tab is a placeholder - will be wired in Part 7. The `event_document_requirements` table is already in the schema from Part 2.
+- **Email participants button**: Not yet wired (email is Part 9). The spec mentions "email participants filtered by status (opens composer with event_id set)" - this will be added in Part 9 when the composer is built.
+- **No new DB migrations**: All tables (events, event_participants, etc.) were created in Part 2.
+
+---
+
+## Manual steps Will must do BEFORE the next Part (Part 7 - Documents)
+
+### Step 1 - Complete all previous manual steps first
+
+Make sure all steps from Parts 2, 3, 4, and 5 are done.
+
+### Step 2 - Test Part 6
+
+1. Start the dev server: `npm run dev`
+2. Go to http://localhost:3000/events
+3. Create a test event using the "New event" button
+4. Open the event and verify all tabs load: Overview, Participants, Check-in, Logistics
+5. Add a player to the Participants tab (use "Add player" and search)
+6. Go to the Check-in tab and tap "In" for the player - verify the count updates
+7. Go to the Logistics tab and click Edit to add flight and room details
+8. Test on mobile: open the Check-in tab on a phone, verify the large tap targets and live counts work
+
+### Step 3 - No database migrations needed for Part 6
+
+All tables were created in Part 2. No new migrations are required.

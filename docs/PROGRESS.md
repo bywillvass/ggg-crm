@@ -866,3 +866,49 @@ All tables were created in Part 2. No new migrations are required.
 ### Step 5 - No database migrations needed for Part 7
 
 All tables were created in Part 2. No new migrations are required.
+
+---
+
+## Part 10 - Blog (2026-10-01) ✅
+
+Blog management at `/blog`. Admin-only. Create, edit, publish, and delete blog posts. Posts synced to GitHub via `GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_BLOG_FILE`, `GITHUB_BRANCH` env vars.
+
+**Known gaps:**
+- Blog sync requires all four GitHub env vars to be set in `.env.local` and Vercel.
+- `settings.logo_path` used in invoice PDFs must be a full URL (not a relative path).
+
+---
+
+## Part 11 - Invoices (2026-10-01) ✅
+
+Invoices at `/invoices`. Full CRUD: create, edit, issue, mark paid, part-paid, overdue, void. PDF generation. Player and event linking. Payment recording.
+
+**Known gaps:**
+- Invoice PDF logo: `settings.logo_path` must be a full publicly accessible URL.
+
+---
+
+## Part 12 - Dashboard and QA (2026-10-01) ✅
+
+### What was built
+
+- **Admin Dashboard** (`src/app/(app)/dashboard/page.tsx`) — server component. Checks role; redirects coaches to `/dashboard/coach`. Fetches all data in parallel: leads this week vs last week (with delta), leads by stage (horizontal CSS bar chart), upcoming events (next 30 days) with confirmed counts, invoice summary (outstanding, overdue, paid this month), tasks due/overdue, recent activity feed.
+- **Coach Dashboard** (`src/app/(app)/dashboard/coach/page.tsx`) — server component. Redirects admins to `/dashboard`. Shows welcome header with coach name, upcoming events list, and the coach's own recent assessments with overall score and recommendation badge.
+- **README.md** — project setup guide with env vars table, database setup, first admin user, cron job, blog sync instructions.
+- **Security headers** — verified in `next.config.ts`: X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy strict-origin-when-cross-origin. CSP not added (Supabase/Resend require too many sources; would risk breaking the app).
+
+### Files created
+
+- `src/app/(app)/dashboard/coach/page.tsx`
+
+### Files modified
+
+- `src/app/(app)/dashboard/page.tsx` — replaced placeholder with full admin dashboard
+- `README.md` — replaced create-next-app boilerplate with GGG CRM setup guide
+- `docs/PROGRESS.md` — Parts 10, 11, 12 entries added
+
+### Known gaps
+
+- Coach role test requires a real coach user in Supabase Auth (invite via `/settings?tab=users`, set role to `coach`).
+- Blog sync: requires `GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_BLOG_FILE`, `GITHUB_BRANCH` env vars.
+- Invoice PDF logos: `settings.logo_path` must be a full URL.

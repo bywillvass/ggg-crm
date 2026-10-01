@@ -5,7 +5,7 @@ import { toast } from "sonner"
 import Papa from "papaparse"
 import { format } from "date-fns"
 import {
-  Search, Plus, Download, UserPlus, Trash2, CheckSquare, Square,
+  Search, Plus, Download, UserPlus, Trash2, CheckSquare, Square, Mail,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -28,6 +28,8 @@ import {
   type EventDetail,
   type ParticipantRow,
 } from "@/app/(app)/events/actions"
+import { CampaignComposer } from "@/components/email/CampaignComposer"
+import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 import type { Database, Tables } from "@/lib/database.types"
 
 type ParticipantStatus = Database["public"]["Enums"]["participant_status"]
@@ -62,11 +64,16 @@ export function EventParticipantsTab({
   event,
   onUpdate,
   role,
+  emailTemplates = [],
+  emailEvents = [],
 }: {
   event: EventDetail
   onUpdate: (e: EventDetail) => void
   role: AppRole
+  emailTemplates?: EmailTemplateRow[]
+  emailEvents?: Pick<Tables<"events">, "id" | "title" | "start_at" | "timezone">[]
 }) {
+  const [showEmailComposer, setShowEmailComposer] = useState(false)
   const [search, setSearch] = useState("")
   const [filterStatus, setFilterStatus] = useState<ParticipantStatus | "">("")
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -360,6 +367,9 @@ export function EventParticipantsTab({
             <Button variant="outline" size="sm" onClick={exportCSV}>
               <Download className="w-4 h-4 mr-1" />CSV
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowEmailComposer(true)}>
+              <Mail className="w-4 h-4 mr-1" />Email participants
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setShowAddPlayer(true)}>
               <Plus className="w-4 h-4 mr-1" />Add player
             </Button>
@@ -372,6 +382,16 @@ export function EventParticipantsTab({
           </>
         )}
       </div>
+
+      {showEmailComposer && (
+        <CampaignComposer
+          open={showEmailComposer}
+          onClose={() => setShowEmailComposer(false)}
+          templates={emailTemplates}
+          events={emailEvents.length > 0 ? emailEvents : [{ id: event.id, title: event.title, start_at: event.start_at, timezone: event.timezone }]}
+          prefilledEventId={event.id}
+        />
+      )}
 
       {/* Bulk actions (admin only) */}
       {role === "admin" && selected.size > 0 && (

@@ -115,10 +115,14 @@ export function EventDetail({
   event: initialEvent,
   templates,
   role,
+  emailTemplates = [],
+  emailEvents = [],
 }: {
   event: EventDetailType
   templates: Pick<Tables<"email_templates">, "id" | "name">[]
   role: AppRole
+  emailTemplates?: Tables<"email_templates">[]
+  emailEvents?: Pick<Tables<"events">, "id" | "title" | "start_at" | "timezone">[]
 }) {
   const router = useRouter()
   const [event, setEvent] = useState(initialEvent)
@@ -398,7 +402,13 @@ export function EventDetail({
       )}
 
       {tab === "participants" && (
-        <EventParticipantsTab event={event} onUpdate={setEvent} role={role} />
+        <EventParticipantsTab
+          event={event}
+          onUpdate={setEvent}
+          role={role}
+          emailTemplates={emailTemplates}
+          emailEvents={emailEvents}
+        />
       )}
 
       {tab === "check-in" && (

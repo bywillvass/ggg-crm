@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation"
 import { getEvent, listEmailTemplates } from "../actions"
+import { listTemplates, listEventsForEmail } from "@/app/(app)/email/actions"
 import { EventDetail } from "@/components/events/EventDetail"
 import { getCurrentRole } from "@/lib/auth/role"
 
@@ -15,5 +16,17 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
 
   if (!event) notFound()
 
-  return <EventDetail event={event} templates={templates} role={role ?? "coach"} />
+  const [emailTemplates, emailEvents] = role === "admin"
+    ? await Promise.all([listTemplates(), listEventsForEmail()])
+    : [[], []]
+
+  return (
+    <EventDetail
+      event={event}
+      templates={templates}
+      role={role ?? "coach"}
+      emailTemplates={emailTemplates}
+      emailEvents={emailEvents}
+    />
+  )
 }

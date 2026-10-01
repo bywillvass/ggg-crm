@@ -1,5 +1,117 @@
 # GGG CRM - Build Progress
 
+## Part 9 - Email (2026-10-01)
+
+### What was built
+
+- Email sender library at `src/lib/email/sender.ts`:
+  - `processEmailQueue(limit)` - loads settings, enforces daily cap in Sydney tz, fetches queued messages, replaces merge fields, wraps plain text in branded HTML, injects footer and List-Unsubscribe headers into HTML, batches via Resend `batch.send` when no attachments, falls back to `emails.send` for attachment-bearing messages (fetched from `email-attachments` storage bucket), returns `{ sent, failed, skipped, capped }`
+  - `sendSingleEmail(messageId)` - same logic for one message (used for tests and one-off transactional emails)
+  - `scheduleEventReminders()` - scans events with `reminder_hours_before` and `reminder_template_id` set, queues one `email_messages` row per confirmed participant (skips if an existing non-failed reminder is already present for that event+contact+campaign-null)
+  - `markOverdueInvoices()` - updates invoices with past due date and status not in paid/void/overdue
+  - `recalculateCampaignCounts(campaignId)` - recomputes total/sent/delivered/opened/clicked/bounced on `email_campaigns`
+- Audience resolver at `src/lib/email/audience.ts`: `resolveAudienceServer(audience)` handling `fixed | contacts | leads | event`; returns `{ contacts, skipped, total }` with unsubscribed/no-email filtered out of the valid list
+- Public endpoints:
+  - `GET /api/cron/run` - secret-gated via `x-cron-secret`; activates due scheduled campaigns (resolves audience + inserts `email_messages`), processes queue, schedules event reminders, marks overdue invoices, closes any `sending` campaign with no remaining queued messages
+  - `POST /api/webhooks/resend` - svix-verified; handles `email.delivered`, `email.opened`, `email.clicked`, `email.bounced`, `email.complained`; bounce/complaint auto-unsubscribes contact and logs activity; recalculates campaign counts
+  - `POST /api/unsubscribe` - token-verified unsubscribe; sets `unsubscribed_at` and logs activity
+  - `/unsubscribe?token=...` - branded page with client-side form that POSTs to `/api/unsubscribe`
+  - `/rsvp?token=...&answer=yes|no` - branded page; sets participant to confirmed/waitlisted (auto-waitlist on capacity) or declined; logs `rsvp` activity
+- Server actions at `src/app/(app)/email/actions.ts`:
+  - CRUD: `listCampaigns`, `getCampaign` (with messages + attachments), `createCampaign`, `updateCampaign`, `deleteCampaign` (draft only), `duplicateCampaign`
+  - Sending: `sendCampaignNow` (resolves audience, inserts messages, calls `processEmailQueue` inline, closes campaign), `scheduleCampaign`, `cancelScheduledCampaign`, `sendTestEmail`
+  - Attachments: `uploadAttachment` (base64 to `email-attachments` bucket + DB row), `deleteAttachment`
+  - Templates: `listTemplates`, `saveAsTemplate`, `deleteTemplate`
+  - One-off/transactional: `sendOneOffEmail`
+  - Lookups: `listEventsForEmail`, `listContactsForFixed`, `getContactEmails`
+  - Image uploads for Tiptap: `getImageUploadUrl` returns presigned URL to `blog-media` bucket plus the public URL
+- Email list page `src/app/(app)/email/page.tsx` and campaign detail page `src/app/(app)/email/[id]/page.tsx`
+- Components:
+  - `EmailShell` - campaigns table with status badges, duplicate/delete actions, new-campaign button
+  - `CampaignComposer` - 3-step wizard: 1) audience (contacts/leads/event/fixed) with live resolved count and preview chips, 2) content (name/subject/preheader + plain or HTML body with Tiptap, merge-field insert buttons, template load, save-as-template, attachments), 3) review (rendered preview, recipient summary, send-test, schedule, send-now with confirmation)
+  - `TiptapEditor` - Editor and Raw-HTML tabs; toolbar for bold/italic/H2/H3/link/bullet/numbered/image/HR; image upload via server action `getImageUploadUrl` into `blog-media` bucket
+  - `CampaignDetail` - stats bar (sent/delivered/opened/clicked/bounced with percentages), paginated recipients table, duplicate/edit/delete
+  - `OneOffEmailDialog` - subject + text body, yellow warning banner if contact unsubscribed, sends via `sendOneOffEmail`
+- Wiring:
+  - `ContactDetail` - "Send email" button in header + `OneOffEmailDialog`; existing Emails tab unchanged (`contact.email_messages` already in `getContact`)
+  - `ContactsShell` - bulk "Send email" action in selection bar opens `CampaignComposer` with pre-filled contact IDs; page passes templates and events
+  - `EventParticipantsTab` - "Email participants" button (admin only) opens `CampaignComposer` with event audience pre-filled; `EventDetail` and the event page thread the email templates/events down
+
+### Files created
+
+- `src/lib/email/sender.ts`
+- `src/lib/email/audience.ts`
+- `src/app/api/cron/run/route.ts`
+- `src/app/api/webhooks/resend/route.ts`
+- `src/app/api/unsubscribe/route.ts`
+- `src/app/unsubscribe/page.tsx`
+- `src/app/unsubscribe/UnsubscribeForm.tsx`
+- `src/app/rsvp/page.tsx`
+- `src/app/(app)/email/actions.ts`
+- `src/app/(app)/email/page.tsx`
+- `src/app/(app)/email/[id]/page.tsx`
+- `src/components/email/EmailShell.tsx`
+- `src/components/email/CampaignComposer.tsx`
+- `src/components/email/CampaignDetail.tsx`
+- `src/components/email/TiptapEditor.tsx`
+- `src/components/email/OneOffEmailDialog.tsx`
+
+### Files modified
+
+- `src/components/contacts/ContactDetail.tsx` - "Send email" button + `OneOffEmailDialog`
+- `src/components/contacts/ContactsShell.tsx` - bulk "Send email" action, templates/events props
+- `src/app/(app)/contacts/page.tsx` - fetch templates and events for the shell
+- `src/components/events/EventParticipantsTab.tsx` - "Email participants" button + `CampaignComposer`
+- `src/components/events/EventDetail.tsx` - accept and forward `emailTemplates`/`emailEvents`
+- `src/app/(app)/events/[id]/page.tsx` - fetch and pass email templates/events
+
+### Decisions made
+
+- Resend batch send is used for messages with no attachments (one Resend call per queue tick, up to 40 at a time). Messages with attachments go through `resend.emails.send` one at a time because Resend's batch API does not support attachments.
+- Daily cap is enforced in Sydney time by counting all `email_messages` with `sent_at >=` Sydney midnight and status in sent/delivered/opened/clicked/bounced/complained.
+- Unsubscribe tokens are signed with `signToken({ contact_id }, "365d")` - unsubscribe links don't need DB rows, verification is purely JWT.
+- RSVP tokens use `signToken({ event_participant_id }, ...)` - RSVP pages use `serviceClient` (no auth session), consistent with the document upload flow.
+- Merge fields are substituted at send time (not when queued) so changes to contact/player/event records between queueing and sending are reflected.
+- Plain-format emails get wrapped in a branded HTML shell (navy header, white card, DM Sans stack, gray footer with Unsubscribe link). HTML-format emails get the footer injected before `</body>` so the sender keeps full control of the body design.
+- `email_campaigns.audience` is stored as JSON matching the `AudienceFilter` type (`{ type, filters?, contactIds? }`). `resolveAudienceServer` is exported from `src/lib/email/audience.ts` and called by both server actions and the cron route.
+- `sendTestEmail` always creates/reuses a `[Test Recipient]` contact for the provided email with `marketing_consent: "express"`. The test subject gets `[TEST]` prefix.
+- Webhook event parsing: svix returns `unknown` so we cast through `unknown as ResendEvent`. Unknown event types are silently acknowledged.
+- `requireAnyRole` was not needed in email actions (every surface is admin-only except `resolveAudience` which requires auth only since it's used during composer preview).
+- Attachment upload is server-side via base64 payload (small files from Composer dialog). Larger uploads would need a presigned URL flow; the Composer currently reads via `FileReader.readAsDataURL`.
+
+### Manual steps needed
+
+Database:
+- A `email-attachments` storage bucket must exist in Supabase. Create via Dashboard -> Storage -> New bucket -> name `email-attachments`, private.
+- The `blog-media` bucket (used by Tiptap image uploads) must exist and be set to public (so inlined email images are reachable).
+
+Environment variables (add to Vercel + local `.env.local`):
+- `RESEND_API_KEY` - from https://resend.com dashboard
+- `RESEND_WEBHOOK_SECRET` - from Resend Webhooks page (whsec_...)
+- `CRON_SECRET` - any random string; pass as `x-cron-secret` header from the cron service
+- `NEXT_PUBLIC_APP_URL` - already in use for document upload links
+
+Resend setup:
+1. Verify sending domain in Resend (DKIM/SPF/DMARC)
+2. Set `settings.email_from_address` and `settings.email_from_name` in the CRM (or SQL update)
+3. Create a webhook in Resend pointing to `https://<app-url>/api/webhooks/resend` with events: `email.delivered`, `email.opened`, `email.clicked`, `email.bounced`, `email.complained`. Copy the signing secret to `RESEND_WEBHOOK_SECRET`.
+4. Add tracking - in Resend domain settings enable click/open tracking.
+
+Cron setup (choose one):
+- Vercel Cron: add `vercel.json` with a job hitting `GET /api/cron/run` every 5 min and set `headers: { "x-cron-secret": "<CRON_SECRET>" }` via `crons` config.
+- External scheduler (EasyCron, cron-job.org, GitHub Actions): schedule GET to `/api/cron/run` every 5 minutes with header `x-cron-secret`.
+
+Smoke test flow:
+1. Go to `/email` -> New campaign -> Audience Fixed or Contacts filter -> Content: plain body with `{{contact_first_name}}` -> Review -> Send test to your email
+2. Verify branded wrapper, correct merge fields, unsubscribe link
+3. Click Send now -> watch campaign stats populate on `/email/[id]`
+4. Click the unsubscribe link in the received email -> `/unsubscribe` page -> Unsubscribe -> verify `contacts.unsubscribed_at` set and activity row created
+5. Configure an event with `reminder_hours_before=24` and a reminder template, confirm a participant, trigger `/api/cron/run` -> verify a queued email_message appears
+6. For RSVP: generate a signed token with `signToken({ event_participant_id: "..." })` and open `/rsvp?token=...&answer=yes`
+7. Verify webhook: send a test email, open it in Gmail, confirm `email.opened` fires and `email_messages.status` becomes `opened`
+
+---
+
 ## Part 8 - Assessments (2026-10-01)
 
 ### What was built

@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Mail, Phone, Archive, Edit2, UserPlus, GitMerge, X, Check } from "lucide-react"
+import { Mail, Phone, Archive, Edit2, UserPlus, GitMerge, X, Check, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,6 +23,7 @@ import { AddActivityDialog } from "@/components/shared/AddActivityDialog"
 import { AddTaskDialog } from "@/components/shared/AddTaskDialog"
 import { TaskList } from "@/components/shared/TaskList"
 import { MergeContactsDialog } from "@/components/contacts/MergeContactsDialog"
+import { OneOffEmailDialog } from "@/components/email/OneOffEmailDialog"
 import {
   updateContact,
   archiveContact,
@@ -65,6 +66,7 @@ export function ContactDetail({ contact: initial }: Props) {
   const [mergeOpen, setMergeOpen] = useState(false)
   const [linkPlayerOpen, setLinkPlayerOpen] = useState(false)
   const [linkForm, setLinkForm] = useState({ player_id: "", relationship: "parent", is_primary: false, is_emergency: false })
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false)
 
   async function handleSave() {
     setSaving(true)
@@ -207,6 +209,15 @@ export function ContactDetail({ contact: initial }: Props) {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEmailDialogOpen(true)}
+            disabled={!contact.email}
+          >
+            <Send className="h-3.5 w-3.5 mr-1.5" />
+            Send email
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setEditing(!editing)}>
             <Edit2 className="h-3.5 w-3.5 mr-1.5" />
             Edit
@@ -448,6 +459,16 @@ export function ContactDetail({ contact: initial }: Props) {
         onClose={() => setMergeOpen(false)}
         onMerged={() => router.refresh()}
         masterContact={{ ...contact, player_contacts: contact.player_contacts.map((pc) => ({ player_id: pc.player_id })) }}
+      />
+
+      <OneOffEmailDialog
+        open={emailDialogOpen}
+        onClose={() => setEmailDialogOpen(false)}
+        contactId={contact.id}
+        contactName={`${contact.first_name ?? ""} ${contact.last_name ?? ""}`.trim() || "Contact"}
+        contactEmail={contact.email}
+        contactUnsubscribedAt={contact.unsubscribed_at}
+        onSent={() => router.refresh()}
       />
 
       <Dialog open={linkPlayerOpen} onOpenChange={(o) => { if (!o) setLinkPlayerOpen(false) }}>

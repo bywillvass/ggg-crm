@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Search, Plus, Archive, Tag } from "lucide-react"
+import { Search, Plus, Archive, Tag, Mail } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,7 +23,9 @@ import {
   addTagToContact,
   type ContactWithPlayers,
 } from "@/app/(app)/contacts/actions"
-import type { Database, TablesInsert } from "@/lib/database.types"
+import { CampaignComposer } from "@/components/email/CampaignComposer"
+import type { Tables, Database, TablesInsert } from "@/lib/database.types"
+import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 
 type ConsentType = Database["public"]["Enums"]["consent_type"]
 type LeadSource = Database["public"]["Enums"]["lead_source"]
@@ -32,7 +34,15 @@ const SOURCES: LeadSource[] = ["website", "meta_instant_form", "newsletter", "re
 const CONSENT_TYPES: ConsentType[] = ["express", "inferred", "none"]
 const PAGE_SIZE = 25
 
-export function ContactsShell({ contacts: initialContacts }: { contacts: ContactWithPlayers[] }) {
+export function ContactsShell({
+  contacts: initialContacts,
+  emailTemplates = [],
+  emailEvents = [],
+}: {
+  contacts: ContactWithPlayers[]
+  emailTemplates?: EmailTemplateRow[]
+  emailEvents?: Pick<Tables<"events">, "id" | "title" | "start_at" | "timezone">[]
+}) {
   const router = useRouter()
   const contacts = initialContacts
   const [search, setSearch] = useState("")
@@ -45,6 +55,7 @@ export function ContactsShell({ contacts: initialContacts }: { contacts: Contact
   const [bulkTagDialogOpen, setBulkTagDialogOpen] = useState(false)
   const [bulkTag, setBulkTag] = useState("")
   const [saving, setSaving] = useState(false)
+  const [bulkEmailOpen, setBulkEmailOpen] = useState(false)
 
   const [newForm, setNewForm] = useState<Partial<TablesInsert<"contacts">>>({
     marketing_consent: "none",
@@ -198,6 +209,14 @@ export function ContactsShell({ contacts: initialContacts }: { contacts: Contact
           <Button
             size="sm"
             variant="outline"
+            onClick={() => setBulkEmailOpen(true)}
+          >
+            <Mail className="h-3.5 w-3.5 mr-1.5" />
+            Send email
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => setBulkTagDialogOpen(true)}
           >
             <Tag className="h-3.5 w-3.5 mr-1.5" />
@@ -213,6 +232,16 @@ export function ContactsShell({ contacts: initialContacts }: { contacts: Contact
             Archive
           </Button>
         </div>
+      )}
+
+      {bulkEmailOpen && (
+        <CampaignComposer
+          open={bulkEmailOpen}
+          onClose={() => setBulkEmailOpen(false)}
+          templates={emailTemplates}
+          events={emailEvents}
+          prefilledContactIds={Array.from(selected)}
+        />
       )}
 
       <div className="rounded-lg border bg-white overflow-x-auto">

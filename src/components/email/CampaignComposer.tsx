@@ -42,7 +42,7 @@ type ParticipantStatus = Database["public"]["Enums"]["participant_status"]
 type ConsentType = Database["public"]["Enums"]["consent_type"]
 
 const PARTICIPANT_STATUSES: ParticipantStatus[] = [
-  "invited", "contacted", "confirmed", "declined", "waitlisted", "attended", "no_show", "cancelled",
+  "to_be_invited", "invited", "confirmed", "declined", "waitlisted", "attended", "no_show", "cancelled",
 ]
 
 const MERGE_FIELDS = [

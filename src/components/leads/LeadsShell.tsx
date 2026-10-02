@@ -113,7 +113,7 @@ const CITY_ALIASES: Record<string, string> = {
   // Sydney
   sydney: "Sydney", syd: "Sydney", sydneycbd: "Sydney",
   // Brisbane
-  brisbane: "Brisbane", bris: "Brisbane", brisbane: "Brisbane",
+  brisbane: "Brisbane", bris: "Brisbane",
   // Gold Coast
   goldcoast: "Gold Coast", gc: "Gold Coast",
   // Perth

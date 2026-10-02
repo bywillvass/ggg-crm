@@ -1,7 +1,6 @@
 "use server"
 
-import { requireAdmin } from "@/lib/auth/role"
-import { createClient } from "@/lib/supabase/server"
+import { requireAdmin, getAuthUser } from "@/lib/auth/role"
 import { logActivity } from "@/lib/activity"
 import type { Database } from "@/lib/database.types"
 
@@ -16,8 +15,7 @@ export async function logManualActivity(input: {
   event_id?: string
 }): Promise<{ error: string | null }> {
   await requireAdmin()
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await getAuthUser()
 
   await logActivity({
     type: input.type,

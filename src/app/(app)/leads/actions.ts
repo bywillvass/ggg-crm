@@ -1,7 +1,7 @@
 "use server"
 
 import { unstable_cache, updateTag } from "next/cache"
-import { requireAdmin } from "@/lib/auth/role"
+import { requireAdmin, getAuthUser } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
 import { logActivity } from "@/lib/activity"
@@ -120,8 +120,7 @@ export async function createLead(
   input: TablesInsert<"leads">
 ): Promise<{ data: Tables<"leads"> | null; error: string | null }> {
   await requireAdmin()
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const [user, supabase] = await Promise.all([getAuthUser(), createClient()])
 
   const { data, error } = await supabase
     .from("leads")
@@ -164,8 +163,7 @@ export async function updateLeadStage(
   newStage: LeadStage
 ): Promise<{ error: string | null }> {
   await requireAdmin()
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const [user, supabase] = await Promise.all([getAuthUser(), createClient()])
 
   const { error } = await supabase
     .from("leads")

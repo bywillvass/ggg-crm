@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation"
-import { getCurrentRole } from "@/lib/auth/role"
+import { getCurrentRole, getAuthUser } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
 import { cn } from "cn"
 
@@ -24,9 +24,9 @@ export default async function CoachDashboardPage() {
   const role = await getCurrentRole()
   if (role === "admin") redirect("/dashboard")
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await getAuthUser()
   if (!user) redirect("/login")
+  const supabase = await createClient()
 
   const [profileRes, upcomingEventsRes, recentAssessmentsRes] = await Promise.all([
     supabase.from("profiles").select("full_name").eq("id", user.id).single(),

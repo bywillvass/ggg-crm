@@ -43,17 +43,17 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
 
   const { pathname } = request.nextUrl
 
-  if (!user && !isPublic(pathname)) {
+  if (!session && !isPublic(pathname)) {
     const loginUrl = request.nextUrl.clone()
     loginUrl.pathname = '/login'
     return NextResponse.redirect(loginUrl)
   }
 
-  if (user && (pathname === '/login' || pathname === '/forgot-password')) {
+  if (session && (pathname === '/login' || pathname === '/forgot-password')) {
     const dashboardUrl = request.nextUrl.clone()
     dashboardUrl.pathname = '/dashboard'
     return NextResponse.redirect(dashboardUrl)

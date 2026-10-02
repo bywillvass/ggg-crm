@@ -62,7 +62,7 @@ export async function listSubscribers(): Promise<SubscriberRow[]> {
   const { data } = await supabase
     .from("contacts")
     .select("id, first_name, last_name, email, created_at, unsubscribed_at")
-    .contains("tags", ["newsletter"])
+    .eq("marketing_consent", "express")
     .is("archived_at", null)
     .order("created_at", { ascending: false })
   return data ?? []

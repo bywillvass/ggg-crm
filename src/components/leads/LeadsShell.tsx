@@ -151,6 +151,17 @@ function getCityFromLead(lead: LeadWithRelations): string | null {
   return null
 }
 
+const FORM_TYPE_LABELS: Record<string, string> = {
+  contact: "Contact Form",
+  eoi: "Expression of Interest",
+  newsletter: "Newsletter",
+}
+
+function formatFormType(ft: string): string {
+  if (FORM_TYPE_LABELS[ft.toLowerCase()]) return FORM_TYPE_LABELS[ft.toLowerCase()]
+  return ft.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 function stageBadgeVariant(stage: LeadStage): "secondary" | "default" | "warning" | "success" | "destructive" {
   const map: Record<LeadStage, "secondary" | "default" | "warning" | "success" | "destructive"> = {
     new: "secondary", contacted: "default", interested: "warning",
@@ -252,12 +263,6 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     [leads, thirtyDaysAgo]
   )
 
-  const sourceBreakdown = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const l of leads) counts[l.source] = (counts[l.source] ?? 0) + 1
-    return SOURCES.filter((s) => (counts[s] ?? 0) > 0).map((s) => ({ source: s, count: counts[s] ?? 0 }))
-  }, [leads])
-
   const formTypeBreakdown = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const l of leads) {
@@ -265,6 +270,22 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
       counts[ft] = (counts[ft] ?? 0) + 1
     }
     return Object.entries(counts).sort((a, b) => b[1] - a[1])
+  }, [leads])
+
+  type FormCard = { key: string; formType: string; source: string; count: number; cities: [string, number][] }
+  const formBreakdown = useMemo((): FormCard[] => {
+    const map: Record<string, { formType: string; source: string; count: number; cities: Record<string, number> }> = {}
+    for (const l of leads) {
+      const ft = l.form_type ?? "unknown"
+      const key = `${ft}|||${l.source}`
+      if (!map[key]) map[key] = { formType: ft, source: l.source, count: 0, cities: {} }
+      map[key].count++
+      const city = getCityFromLead(l)
+      if (city) map[key].cities[city] = (map[key].cities[city] ?? 0) + 1
+    }
+    return Object.entries(map)
+      .map(([key, v]) => ({ key, ...v, cities: Object.entries(v.cities).sort((a, b) => b[1] - a[1]) }))
+      .sort((a, b) => b.count - a.count)
   }, [leads])
 
   const cityBreakdown = useMemo(() => {
@@ -322,16 +343,16 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const pageCount = Math.ceil(filtered.length / PAGE_SIZE)
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
-  function drillIntoSource(source: string) {
-    setFilterSource(source); setFilterStage(""); setFilterFormType(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
+  function drillIntoForm(formType: string, source: string) {
+    setFilterFormType(formType); setFilterSource(source); setFilterStage(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
+  }
+
+  function drillIntoFormCity(formType: string, source: string, city: string) {
+    setFilterFormType(formType); setFilterSource(source); setFilterCity(city); setFilterStage(""); setSearch(""); setPage(1); setView("table")
   }
 
   function drillIntoStage(stage: string) {
     setFilterStage(stage); setFilterSource(""); setFilterFormType(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
-  }
-
-  function drillIntoFormType(ft: string) {
-    setFilterFormType(ft); setFilterSource(""); setFilterStage(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
   }
 
   function drillIntoCity(city: string) {
@@ -428,11 +449,15 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
 
   // ─── Shared header ──────────────────────────────────────────────────────────
 
-  const activeFilterLabel = filterSource ? SOURCE_LABELS[filterSource] ?? filterSource
-    : filterStage ? STAGE_LABELS[filterStage] ?? filterStage
-    : filterFormType ? filterFormType
-    : filterCity ? filterCity
-    : null
+  const activeFilterLabel = (() => {
+    const parts: string[] = []
+    if (filterFormType) parts.push(formatFormType(filterFormType === "unknown" ? "No form type" : filterFormType))
+    if (filterSource) parts.push(SOURCE_LABELS[filterSource] ?? filterSource)
+    if (filterCity) parts.push(filterCity)
+    if (parts.length) return parts.join(" · ")
+    if (filterStage) return STAGE_LABELS[filterStage] ?? filterStage
+    return null
+  })()
 
   return (
     <div className="flex flex-col h-full">
@@ -515,71 +540,47 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
               </div>
             </div>
 
-            {/* Source breakdown */}
-            {sourceBreakdown.length > 0 && (
+            {/* Forms — one card per form type × source combination, auto-discovered */}
+            {formBreakdown.length > 0 && (
               <div>
-                <h2 className="text-sm font-semibold text-gray-700 mb-3">By Source</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                  {sourceBreakdown.map(({ source, count }) => (
+                <h2 className="text-sm font-semibold text-gray-700 mb-3">Forms</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {formBreakdown.map(({ key, formType, source, count, cities }) => (
                     <button
-                      key={source}
-                      onClick={() => drillIntoSource(source)}
-                      className={cn(
-                        "group flex items-center justify-between rounded-xl border px-4 py-3 hover:shadow-sm transition-all text-left",
-                        SOURCE_COLOURS[source] ?? "bg-gray-50 border-gray-200 text-gray-700"
+                      key={key}
+                      onClick={() => drillIntoForm(formType, source)}
+                      className="group flex flex-col rounded-xl border border-gray-200 bg-white px-5 py-4 hover:border-[#0C0F4C] hover:shadow-sm transition-all text-left"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-[#0C0F4C] truncate">
+                            {formType === "unknown" ? "No form type" : formatFormType(formType)}
+                          </p>
+                          <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium mt-1.5 inline-block", SOURCE_COLOURS[source] ?? "bg-gray-50 border-gray-200 text-gray-600")}>
+                            {SOURCE_LABELS[source] ?? source}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-3xl font-bold text-[#0C0F4C]">{count}</span>
+                          <ChevronRight className="h-4 w-4 opacity-40 group-hover:opacity-80 transition-opacity mt-1" />
+                        </div>
+                      </div>
+                      {cities.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100">
+                          {cities.slice(0, 5).map(([city, n]) => (
+                            <span
+                              key={city}
+                              onClick={(e) => { e.stopPropagation(); drillIntoFormCity(formType, source, city) }}
+                              className="flex items-center gap-1 text-xs bg-gray-100 hover:bg-[#0C0F4C] hover:text-white text-gray-600 rounded-full px-2.5 py-1 cursor-pointer transition-colors"
+                            >
+                              <MapPin className="h-2.5 w-2.5" />{city} <span className="font-semibold">{n}</span>
+                            </span>
+                          ))}
+                          {cities.length > 5 && (
+                            <span className="text-xs text-gray-400 self-center">+{cities.length - 5} more</span>
+                          )}
+                        </div>
                       )}
-                    >
-                      <div>
-                        <p className="font-semibold text-lg leading-none">{count}</p>
-                        <p className="text-xs mt-1 opacity-80">{SOURCE_LABELS[source] ?? source}</p>
-                      </div>
-                      <ChevronRight className="h-4 w-4 opacity-40 group-hover:opacity-80 transition-opacity" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Form type breakdown */}
-            {formTypeBreakdown.length > 1 && (
-              <div>
-                <h2 className="text-sm font-semibold text-gray-700 mb-3">By Form Type</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                  {formTypeBreakdown.map(([ft, count]) => (
-                    <button
-                      key={ft}
-                      onClick={() => drillIntoFormType(ft)}
-                      className="group flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 hover:border-[#0C0F4C] hover:shadow-sm transition-all text-left"
-                    >
-                      <div>
-                        <p className="font-semibold text-lg leading-none text-[#0C0F4C]">{count}</p>
-                        <p className="text-xs mt-1 text-gray-500 capitalize">{ft === "unknown" ? "No form type" : ft.replace(/_/g, " ")}</p>
-                      </div>
-                      <ChevronRight className="h-4 w-4 opacity-40 group-hover:opacity-80 transition-opacity" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* City breakdown */}
-            {cityBreakdown.length > 1 && (
-              <div>
-                <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
-                  <MapPin className="h-3.5 w-3.5 text-gray-400" /> By City
-                </h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                  {cityBreakdown.map(([city, count]) => (
-                    <button
-                      key={city}
-                      onClick={() => drillIntoCity(city)}
-                      className="group flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 hover:border-[#0C0F4C] hover:shadow-sm transition-all text-left"
-                    >
-                      <div>
-                        <p className="font-semibold text-lg leading-none text-[#0C0F4C]">{count}</p>
-                        <p className="text-xs mt-1 text-gray-500">{city}</p>
-                      </div>
-                      <ChevronRight className="h-4 w-4 opacity-40 group-hover:opacity-80 transition-opacity" />
                     </button>
                   ))}
                 </div>
@@ -603,7 +604,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                       <tr className="border-b bg-gray-50 text-left">
                         <th className="px-4 py-2.5 text-xs font-medium text-gray-500">Contact</th>
                         <th className="px-4 py-2.5 text-xs font-medium text-gray-500 hidden md:table-cell">Player</th>
-                        <th className="px-4 py-2.5 text-xs font-medium text-gray-500">Source</th>
+                        <th className="px-4 py-2.5 text-xs font-medium text-gray-500">Form</th>
                         <th className="px-4 py-2.5 text-xs font-medium text-gray-500">Stage</th>
                         <th className="px-4 py-2.5 text-xs font-medium text-gray-500 hidden lg:table-cell">Date</th>
                       </tr>
@@ -621,7 +622,8 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                             {lead.players ? `${lead.players.first_name} ${lead.players.last_name}${lead.players.birth_year ? ` (${lead.players.birth_year})` : ""}` : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-4 py-3">
-                            <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium", SOURCE_COLOURS[lead.source] ?? "bg-gray-100 text-gray-600 border-gray-200")}>
+                            <p className="text-xs font-medium text-gray-700">{lead.form_type ? formatFormType(lead.form_type) : "—"}</p>
+                            <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium mt-0.5 inline-block", SOURCE_COLOURS[lead.source] ?? "bg-gray-100 text-gray-600 border-gray-200")}>
                               {SOURCE_LABELS[lead.source] ?? lead.source}
                             </span>
                           </td>
@@ -659,10 +661,26 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1) }} placeholder="Search leads..." className="pl-9" />
               </div>
-              <select value={filterSource} onChange={(e) => { setFilterSource(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
-                <option value="">All sources</option>
-                {SOURCES.map((s) => <option key={s} value={s}>{SOURCE_LABELS[s]}</option>)}
-              </select>
+              {/* Form filter — combined form type + source */}
+              {formBreakdown.length > 1 && (
+                <select
+                  value={`${filterFormType}|||${filterSource}`}
+                  onChange={(e) => {
+                    const [ft, src] = e.target.value.split("|||")
+                    setFilterFormType(ft === "" ? "" : ft)
+                    setFilterSource(src === "" ? "" : src)
+                    setPage(1)
+                  }}
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]"
+                >
+                  <option value="|||">All forms</option>
+                  {formBreakdown.map(({ key, formType, source }) => (
+                    <option key={key} value={key}>
+                      {formType === "unknown" ? "No form type" : formatFormType(formType)} — {SOURCE_LABELS[source] ?? source}
+                    </option>
+                  ))}
+                </select>
+              )}
               <select value={filterStage} onChange={(e) => { setFilterStage(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
                 <option value="">All stages</option>
                 {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
@@ -671,12 +689,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                 <option value="">All owners</option>
                 {profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
               </select>
-              {formTypeBreakdown.length > 1 && (
-                <select value={filterFormType} onChange={(e) => { setFilterFormType(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
-                  <option value="">All form types</option>
-                  {formTypeBreakdown.map(([ft]) => <option key={ft} value={ft}>{ft === "unknown" ? "No form type" : ft.replace(/_/g, " ")}</option>)}
-                </select>
-              )}
+              {/* City filter — only show when a form with cities is selected, or always if multiple cities exist */}
               {cityBreakdown.length > 1 && (
                 <select value={filterCity} onChange={(e) => { setFilterCity(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
                   <option value="">All cities</option>

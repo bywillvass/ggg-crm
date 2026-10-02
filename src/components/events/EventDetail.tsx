@@ -77,7 +77,7 @@ function statusVariant(s: EventStatus): "default" | "success" | "warning" | "des
 }
 
 const STATUS_COUNTS: ParticipantStatus[] = [
-  "invited", "contacted", "confirmed", "declined", "waitlisted", "attended", "no_show", "cancelled",
+  "to_be_invited", "invited", "confirmed", "declined", "waitlisted", "attended", "no_show", "cancelled",
 ]
 
 function participantStatusBadge(s: ParticipantStatus): "success" | "warning" | "destructive" | "secondary" | "default" {

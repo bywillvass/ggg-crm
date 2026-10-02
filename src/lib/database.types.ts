@@ -2008,7 +2008,7 @@ export type Database = {
         | "skipped"
       participant_status:
         | "invited"
-        | "contacted"
+        | "to_be_invited"
         | "confirmed"
         | "declined"
         | "waitlisted"
@@ -2222,7 +2222,7 @@ export const Constants = {
       ],
       participant_status: [
         "invited",
-        "contacted",
+        "to_be_invited",
         "confirmed",
         "declined",
         "waitlisted",

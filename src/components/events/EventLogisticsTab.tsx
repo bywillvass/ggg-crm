@@ -40,7 +40,7 @@ export function EventLogisticsTab({
   const [saving, setSaving] = useState(false)
 
   const participants = event.participants.filter((p) =>
-    ["confirmed", "attended", "invited", "contacted", "waitlisted"].includes(p.status)
+    ["confirmed", "attended", "invited", "to_be_invited", "waitlisted"].includes(p.status)
   )
 
   function startEdit(p: ParticipantRow) {

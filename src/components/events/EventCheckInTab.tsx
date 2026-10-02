@@ -45,7 +45,7 @@ export function EventCheckInTab({
   const sorted = useMemo(() => {
     return [...participants].sort((a, b) => {
       const order: Record<string, number> = {
-        confirmed: 0, invited: 1, contacted: 2, waitlisted: 3,
+        confirmed: 0, invited: 1, to_be_invited: 2, waitlisted: 3,
         attended: 4, no_show: 5, declined: 6, cancelled: 7,
       }
       return (order[a.status] ?? 9) - (order[b.status] ?? 9)

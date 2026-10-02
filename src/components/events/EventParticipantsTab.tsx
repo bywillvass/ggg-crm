@@ -36,7 +36,7 @@ type ParticipantStatus = Database["public"]["Enums"]["participant_status"]
 type AppRole = "admin" | "coach"
 
 const ALL_STATUSES: ParticipantStatus[] = [
-  "invited", "contacted", "confirmed", "declined", "waitlisted", "attended", "no_show", "cancelled",
+  "to_be_invited", "invited", "confirmed", "declined", "waitlisted", "attended", "no_show", "cancelled",
 ]
 
 function statusVariant(s: ParticipantStatus): "success" | "warning" | "destructive" | "secondary" | "default" {

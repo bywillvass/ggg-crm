@@ -16,6 +16,7 @@ import {
   UserCheck,
   ArrowLeft,
   ChevronRight,
+  MapPin,
 } from "lucide-react"
 import {
   DndContext,
@@ -104,6 +105,52 @@ const SOURCE_COLOURS: Record<string, string> = {
 
 const PAGE_SIZE = 50
 
+// ─── City normalisation ───────────────────────────────────────────────────────
+
+const CITY_ALIASES: Record<string, string> = {
+  // Melbourne
+  melbourne: "Melbourne", melb: "Melbourne", mel: "Melbourne", melbournecbd: "Melbourne",
+  // Sydney
+  sydney: "Sydney", syd: "Sydney", sydneycbd: "Sydney",
+  // Brisbane
+  brisbane: "Brisbane", bris: "Brisbane", brisbane: "Brisbane",
+  // Gold Coast
+  goldcoast: "Gold Coast", gc: "Gold Coast",
+  // Perth
+  perth: "Perth",
+  // Adelaide
+  adelaide: "Adelaide", adl: "Adelaide",
+  // Canberra
+  canberra: "Canberra", cbr: "Canberra",
+  // Newcastle
+  newcastle: "Newcastle",
+  // Wollongong
+  wollongong: "Wollongong",
+  // Geelong
+  geelong: "Geelong",
+  // Hobart
+  hobart: "Hobart",
+}
+
+function normalizeCity(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null
+  const key = raw.toLowerCase().replace(/[^a-z]/g, "")
+  if (CITY_ALIASES[key]) return CITY_ALIASES[key]
+  return raw.trim().replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function getCityFromLead(lead: LeadWithRelations): string | null {
+  if (lead.contacts?.suburb) return normalizeCity(lead.contacts.suburb)
+  const raw = lead.raw as Record<string, unknown> | null
+  if (raw) {
+    for (const key of ["city", "suburb", "location", "City", "Suburb"]) {
+      const val = raw[key]
+      if (val && typeof val === "string" && val.trim()) return normalizeCity(val)
+    }
+  }
+  return null
+}
+
 function stageBadgeVariant(stage: LeadStage): "secondary" | "default" | "warning" | "success" | "destructive" {
   const map: Record<LeadStage, "secondary" | "default" | "warning" | "success" | "destructive"> = {
     new: "secondary", contacted: "default", interested: "warning",
@@ -178,6 +225,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const [filterStage, setFilterStage] = useState("")
   const [filterOwner, setFilterOwner] = useState("")
   const [filterFormType, setFilterFormType] = useState("")
+  const [filterCity, setFilterCity] = useState("")
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [activeDrag, setActiveDrag] = useState<LeadWithRelations | null>(null)
@@ -219,6 +267,15 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1])
   }, [leads])
 
+  const cityBreakdown = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const l of leads) {
+      const city = getCityFromLead(l)
+      if (city) counts[city] = (counts[city] ?? 0) + 1
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])
+  }, [leads])
+
   const stageCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const l of leads) counts[l.stage] = (counts[l.stage] ?? 0) + 1
@@ -250,8 +307,9 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     if (filterStage) result = result.filter((l) => l.stage === filterStage)
     if (filterOwner) result = result.filter((l) => l.owner_id === filterOwner)
     if (filterFormType) result = result.filter((l) => (l.form_type ?? "unknown") === filterFormType)
+    if (filterCity) result = result.filter((l) => getCityFromLead(l) === filterCity)
     return result
-  }, [leads, search, filterSource, filterStage, filterOwner])
+  }, [leads, search, filterSource, filterStage, filterOwner, filterFormType, filterCity])
 
   const boardLeads = useMemo(() => {
     const cols: Record<LeadStage, LeadWithRelations[]> = {
@@ -265,19 +323,23 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   function drillIntoSource(source: string) {
-    setFilterSource(source); setFilterStage(""); setFilterFormType(""); setSearch(""); setPage(1); setView("table")
+    setFilterSource(source); setFilterStage(""); setFilterFormType(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
   }
 
   function drillIntoStage(stage: string) {
-    setFilterStage(stage); setFilterSource(""); setFilterFormType(""); setSearch(""); setPage(1); setView("table")
+    setFilterStage(stage); setFilterSource(""); setFilterFormType(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
   }
 
   function drillIntoFormType(ft: string) {
-    setFilterFormType(ft); setFilterSource(""); setFilterStage(""); setSearch(""); setPage(1); setView("table")
+    setFilterFormType(ft); setFilterSource(""); setFilterStage(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
+  }
+
+  function drillIntoCity(city: string) {
+    setFilterCity(city); setFilterSource(""); setFilterStage(""); setFilterFormType(""); setSearch(""); setPage(1); setView("table")
   }
 
   function goToOverview() {
-    setFilterSource(""); setFilterStage(""); setFilterFormType(""); setSearch(""); setPage(1); setView("overview")
+    setFilterSource(""); setFilterStage(""); setFilterFormType(""); setFilterCity(""); setSearch(""); setPage(1); setView("overview")
   }
 
   // Kanban drag
@@ -331,6 +393,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     const csv = Papa.unparse(filtered.map((l) => ({
       contact_name: `${l.contacts?.first_name ?? ""} ${l.contacts?.last_name ?? ""}`.trim(),
       contact_email: l.contacts?.email ?? "", contact_phone: l.contacts?.phone ?? "",
+      city: getCityFromLead(l) ?? "",
       player_name: `${l.players?.first_name ?? ""} ${l.players?.last_name ?? ""}`.trim(),
       player_birth_year: l.players?.birth_year ?? "", source: l.source,
       form_type: l.form_type ?? "", stage: l.stage, owner: l.profiles?.full_name ?? "",
@@ -368,6 +431,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const activeFilterLabel = filterSource ? SOURCE_LABELS[filterSource] ?? filterSource
     : filterStage ? STAGE_LABELS[filterStage] ?? filterStage
     : filterFormType ? filterFormType
+    : filterCity ? filterCity
     : null
 
   return (
@@ -498,6 +562,30 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
               </div>
             )}
 
+            {/* City breakdown */}
+            {cityBreakdown.length > 1 && (
+              <div>
+                <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+                  <MapPin className="h-3.5 w-3.5 text-gray-400" /> By City
+                </h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {cityBreakdown.map(([city, count]) => (
+                    <button
+                      key={city}
+                      onClick={() => drillIntoCity(city)}
+                      className="group flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 hover:border-[#0C0F4C] hover:shadow-sm transition-all text-left"
+                    >
+                      <div>
+                        <p className="font-semibold text-lg leading-none text-[#0C0F4C]">{count}</p>
+                        <p className="text-xs mt-1 text-gray-500">{city}</p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 opacity-40 group-hover:opacity-80 transition-opacity" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Recent leads */}
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -589,6 +677,12 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                   {formTypeBreakdown.map(([ft]) => <option key={ft} value={ft}>{ft === "unknown" ? "No form type" : ft.replace(/_/g, " ")}</option>)}
                 </select>
               )}
+              {cityBreakdown.length > 1 && (
+                <select value={filterCity} onChange={(e) => { setFilterCity(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                  <option value="">All cities</option>
+                  {cityBreakdown.map(([city]) => <option key={city} value={city}>{city}</option>)}
+                </select>
+              )}
               <span className="self-center text-sm text-gray-400">{filtered.length.toLocaleString()} leads</span>
             </div>
 
@@ -671,6 +765,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                                 {lead.contacts?.first_name} {lead.contacts?.last_name}
                               </Link>
                               {lead.contacts?.phone && <p className="text-xs text-gray-400">{lead.contacts.phone}</p>}
+                              {getCityFromLead(lead) && <p className="text-xs text-gray-400 flex items-center gap-0.5"><MapPin className="h-2.5 w-2.5" />{getCityFromLead(lead)}</p>}
                             </td>
                             <td className="px-3 py-3 text-gray-600 hidden md:table-cell">
                               {lead.players ? (

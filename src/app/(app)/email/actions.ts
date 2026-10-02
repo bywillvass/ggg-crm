@@ -54,6 +54,20 @@ export async function getCampaign(id: string): Promise<CampaignDetail | null> {
   }
 }
 
+export type SubscriberRow = Pick<Tables<"contacts">, "id" | "first_name" | "last_name" | "email" | "created_at" | "unsubscribed_at">
+
+export async function listSubscribers(): Promise<SubscriberRow[]> {
+  await requireAdmin()
+  const supabase = await createClient()
+  const { data } = await supabase
+    .from("contacts")
+    .select("id, first_name, last_name, email, created_at, unsubscribed_at")
+    .contains("tags", ["newsletter"])
+    .is("archived_at", null)
+    .order("created_at", { ascending: false })
+  return data ?? []
+}
+
 export async function createCampaign(
   input: Partial<TablesInsert<"email_campaigns">> & { name: string; subject: string }
 ): Promise<{ data: EmailCampaignRow | null; error: string | null }> {

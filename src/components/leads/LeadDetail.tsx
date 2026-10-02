@@ -263,20 +263,34 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
 
       {activeTab === "Summary" && (
         <div className="space-y-4">
-          {/* Form message — pulled from raw submission */}
+          {/* Form submission — all fields the person filled out */}
           {(() => {
-            const MESSAGE_KEYS = ["message", "comments", "enquiry", "notes", "comment", "question", "body", "Message", "Comments", "Enquiry"]
             const raw = lead.raw as Record<string, unknown> | null
-            const message = raw
-              ? (MESSAGE_KEYS.map((k) => raw[k]).find((v) => typeof v === "string" && v.trim()) as string | undefined)
-              : (lead.contacts?.notes ?? undefined)
-            if (!message) return null
+            // Skip internal/system keys that aren't useful to display
+            const SKIP = new Set(["external_id", "id", "source", "form_type", "submitted_at", "page_url", "ip", "user_agent"])
+            const entries = raw
+              ? Object.entries(raw).filter(([k, v]) => !SKIP.has(k) && v !== null && v !== undefined && String(v).trim() !== "")
+              : []
+            // Fall back to contacts.notes if no raw data
+            const fallbackNote = !entries.length && lead.contacts?.notes ? lead.contacts.notes : null
+            if (!entries.length && !fallbackNote) return null
             return (
               <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">
-                  {lead.form_type === "contact" ? "Contact message" : lead.form_type === "eoi" ? "Expression of interest" : "Form message"}
+                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3">
+                  {lead.form_type === "contact" ? "Contact form submission" : lead.form_type === "eoi" ? "EOI form submission" : "Form submission"}
                 </p>
-                <p className="text-sm text-gray-800 whitespace-pre-wrap">{message}</p>
+                {fallbackNote ? (
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{fallbackNote}</p>
+                ) : (
+                  <dl className="space-y-2">
+                    {entries.map(([key, value]) => (
+                      <div key={key} className="grid grid-cols-[160px_1fr] gap-2 text-sm">
+                        <dt className="text-blue-700 font-medium truncate">{key}</dt>
+                        <dd className="text-gray-800 whitespace-pre-wrap break-words">{String(value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
               </div>
             )
           })()}

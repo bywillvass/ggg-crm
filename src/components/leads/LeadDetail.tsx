@@ -18,6 +18,7 @@ import {
   updateLead,
   updateLeadStage,
   archiveLead,
+  createAndLinkPlayer,
   type LeadDetail as LeadDetailType,
 } from "@/app/(app)/leads/actions"
 import { completeTask, deleteTask } from "@/app/(app)/tasks/actions"
@@ -27,6 +28,41 @@ import { cn } from "cn"
 type LeadStage = Database["public"]["Enums"]["lead_stage"]
 
 const STAGES: LeadStage[] = ["new", "contacted", "interested", "confirmed", "signed", "not_interested", "lost"]
+
+// Mirror of ingest BUILTIN player keys — used to detect player data in raw
+const PLAYER_FULL_KEYS = new Set(["playername","playersname","playerfullname","playersfullname","childname","childsname","childfullname","childsfullname","kidname","kidsname","kidfullname","kidsfullname","athletename","athletefullname"])
+const PLAYER_FIRST_KEYS = new Set(["playerfirstname","playersfirstname","playerfirst","childfirstname","childsfirstname","kidfirstname","athletefirstname"])
+const PLAYER_LAST_KEYS = new Set(["playerlastname","playerslastname","playerlast","childlastname","childslastname","kidlastname","athletelastname"])
+const PLAYER_BIRTH_KEYS = new Set(["birthyear","yearofbirth","playerbirthyear","playersbirthyear"])
+const PLAYER_CLUB_KEYS = new Set(["club","currentclub","playerclub","team","currentteam","playerteam"])
+
+function nkDetect(k: string) { return k.toLowerCase().replace(/[^a-z0-9]/g, "") }
+
+function detectPlayerFromRaw(raw: Record<string, unknown> | null) {
+  if (!raw) return null
+  let firstName: string | null = null
+  let lastName: string | null = null
+  let birthYear: number | null = null
+  let club: string | null = null
+
+  for (const [k, v] of Object.entries(raw)) {
+    const nk = nkDetect(k)
+    const val = v ? String(v).trim() : ""
+    if (!val) continue
+    if (PLAYER_FULL_KEYS.has(nk) && !firstName) {
+      const parts = val.split(/\s+/)
+      firstName = parts[0] ?? null
+      lastName = parts.slice(1).join(" ") || null
+    }
+    if (PLAYER_FIRST_KEYS.has(nk) && !firstName) firstName = val
+    if (PLAYER_LAST_KEYS.has(nk) && !lastName) lastName = val
+    if (PLAYER_BIRTH_KEYS.has(nk) && !birthYear) { const n = parseInt(val); if (!isNaN(n)) birthYear = n }
+    if (PLAYER_CLUB_KEYS.has(nk) && !club) club = val
+  }
+
+  if (!firstName && !lastName) return null
+  return { firstName, lastName, birthYear, club }
+}
 
 function stageBadge(stage: LeadStage): "secondary" | "default" | "warning" | "success" | "destructive" {
   const map: Record<LeadStage, "secondary" | "default" | "warning" | "success" | "destructive"> = {
@@ -58,6 +94,8 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
   })
   const [addActivityOpen, setAddActivityOpen] = useState(false)
   const [addTaskOpen, setAddTaskOpen] = useState(false)
+  const [creatingPlayer, setCreatingPlayer] = useState(false)
+  const [playerDismissed, setPlayerDismissed] = useState(false)
 
   async function handleStageChange(newStage: LeadStage) {
     setStage(newStage)
@@ -96,6 +134,26 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
     } else {
       toast.success("Lead updated")
       setEditing(false)
+      router.refresh()
+    }
+  }
+
+  async function handleCreatePlayer() {
+    const detected = detectPlayerFromRaw(lead.raw as Record<string, unknown> | null)
+    if (!detected) return
+    setCreatingPlayer(true)
+    const result = await createAndLinkPlayer(lead.id, {
+      first_name: detected.firstName,
+      last_name: detected.lastName,
+      birth_year: detected.birthYear,
+      current_club: detected.club,
+      position: null,
+    })
+    setCreatingPlayer(false)
+    if (result.error) {
+      toast.error(result.error)
+    } else {
+      toast.success("Player created and linked")
       router.refresh()
     }
   }
@@ -357,7 +415,7 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
             </div>
           )}
 
-          {lead.players && (
+          {lead.players ? (
             <div className="rounded-lg border bg-white p-4">
               <p className="text-sm font-semibold text-gray-600 mb-3">Player</p>
               <div className="flex items-center justify-between">
@@ -371,7 +429,37 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
                 </div>
               </div>
             </div>
-          )}
+          ) : !playerDismissed && lead.form_type !== "contact" && (() => {
+            const detected = detectPlayerFromRaw(lead.raw as Record<string, unknown> | null)
+            if (!detected) return null
+            return (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">Player detected in form</p>
+                    <p className="text-sm text-amber-700 mt-0.5">
+                      {[detected.firstName, detected.lastName].filter(Boolean).join(" ")}
+                      {detected.birthYear && ` · Born ${detected.birthYear}`}
+                      {detected.club && ` · ${detected.club}`}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      onClick={handleCreatePlayer}
+                      disabled={creatingPlayer}
+                      className="bg-[#C9A227] hover:bg-[#b8911f] text-white"
+                    >
+                      {creatingPlayer ? "Creating…" : "Create player"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setPlayerDismissed(true)}>
+                      Dismiss
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
         </div>
       )}
 

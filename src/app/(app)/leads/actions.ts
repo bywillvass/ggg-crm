@@ -196,6 +196,58 @@ export async function archiveLead(id: string): Promise<{ error: string | null }>
   return { error: error?.message ?? null }
 }
 
+export async function createAndLinkPlayer(
+  leadId: string,
+  playerData: {
+    first_name: string | null
+    last_name: string | null
+    birth_year: number | null
+    current_club: string | null
+    position: string | null
+  }
+): Promise<{ error: string | null }> {
+  await requireAdmin()
+  const supabase = await createClient()
+
+  // Get the lead to find the contact
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("contact_id")
+    .eq("id", leadId)
+    .single()
+
+  if (!lead) return { error: "Lead not found" }
+
+  // Create the player
+  const { data: player, error: playerError } = await supabase
+    .from("players")
+    .insert({ ...playerData, status: "prospect" })
+    .select("id")
+    .single()
+
+  if (playerError) return { error: playerError.message }
+
+  // Link player to contact if contact exists
+  if (lead.contact_id) {
+    await supabase.from("player_contacts").insert({
+      player_id: player.id,
+      contact_id: lead.contact_id,
+      relationship: "guardian",
+      is_primary: true,
+      is_emergency: false,
+    })
+  }
+
+  // Link player to lead
+  const { error: linkError } = await supabase
+    .from("leads")
+    .update({ player_id: player.id, updated_at: new Date().toISOString() })
+    .eq("id", leadId)
+
+  updateTag("leads")
+  return { error: linkError?.message ?? null }
+}
+
 export async function bulkUpdateStage(
   ids: string[],
   stage: LeadStage

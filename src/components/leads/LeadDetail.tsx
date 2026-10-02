@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Phone, MessageCircle, Mail, StickyNote, Archive, Check } from "lucide-react"
+import { Phone, MessageCircle, Mail, StickyNote, Archive, Check, ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -139,6 +139,9 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
+      <button onClick={() => router.back()} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors -mb-2">
+        <ArrowLeft className="h-4 w-4" /> Back to leads
+      </button>
       <div className="flex items-start gap-4">
         <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold text-[#0C0F4C]">

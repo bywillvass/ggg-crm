@@ -543,3 +543,47 @@ export async function listEmailTemplates(): Promise<Pick<Tables<"email_templates
   const { data } = await supabase.from("email_templates").select("id, name").order("name")
   return data ?? []
 }
+
+export type LeadForEvent = {
+  id: string
+  stage: string
+  source: string
+  form_type: string | null
+  campaign_name: string | null
+  player_id: string | null
+  contact_id: string | null
+  contacts: Pick<Tables<"contacts">, "first_name" | "last_name" | "phone" | "state"> | null
+  players: Pick<Tables<"players">, "id" | "first_name" | "last_name" | "birth_year" | "state"> | null
+}
+
+export async function listLeadsForEvent(eventId: string): Promise<LeadForEvent[]> {
+  await requireAdmin()
+  const supabase = await createClient()
+
+  // Get leads already linked to this event (by source_lead_id) and player_ids already in event
+  const { data: existing } = await supabase
+    .from("event_participants")
+    .select("source_lead_id, player_id")
+    .eq("event_id", eventId)
+
+  const excludeLeadIds = (existing ?? []).map((e) => e.source_lead_id).filter(Boolean) as string[]
+  const excludePlayerIds = (existing ?? []).map((e) => e.player_id).filter(Boolean) as string[]
+
+  let q = supabase
+    .from("leads")
+    .select("id, stage, source, form_type, campaign_name, player_id, contact_id, contacts(first_name, last_name, phone, state), players(id, first_name, last_name, birth_year, state)")
+    .is("archived_at", null)
+    .order("created_at", { ascending: false })
+    .limit(300)
+
+  if (excludeLeadIds.length > 0) {
+    q = q.not("id", "in", `(${excludeLeadIds.join(",")})`)
+  }
+
+  const { data } = await q
+
+  return ((data ?? []) as LeadForEvent[]).filter((l) => {
+    if (!l.player_id) return true
+    return !excludePlayerIds.includes(l.player_id)
+  })
+}

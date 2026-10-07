@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Phone, MessageCircle, Mail, StickyNote, Archive, Check, ArrowLeft } from "lucide-react"
+import { Phone, MessageCircle, Mail, StickyNote, Archive, Check, ArrowLeft, CalendarPlus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -24,6 +24,7 @@ import {
 import { completeTask, deleteTask } from "@/app/(app)/tasks/actions"
 import type { Database, Json } from "@/lib/database.types"
 import { cn } from "cn"
+import { AddToEventDialog } from "@/components/leads/AddToEventDialog"
 
 type LeadStage = Database["public"]["Enums"]["lead_stage"]
 
@@ -96,6 +97,7 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
   const [addTaskOpen, setAddTaskOpen] = useState(false)
   const [creatingPlayer, setCreatingPlayer] = useState(false)
   const [playerDismissed, setPlayerDismissed] = useState(false)
+  const [addToEventOpen, setAddToEventOpen] = useState(false)
 
   async function handleStageChange(newStage: LeadStage) {
     setStage(newStage)
@@ -283,6 +285,10 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
           onClick={() => setAddTaskOpen(true)}
         >
           Add task
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setAddToEventOpen(true)}>
+          <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+          Add to event
         </Button>
       </div>
 
@@ -513,6 +519,14 @@ export function LeadDetail({ lead: initial }: { lead: LeadDetailType }) {
         onSave={() => router.refresh()}
         leadId={lead.id}
         contactId={lead.contact_id ?? undefined}
+      />
+
+      <AddToEventDialog
+        leadId={lead.id}
+        leadName={`${lead.contacts?.first_name ?? ""} ${lead.contacts?.last_name ?? ""}`.trim()}
+        open={addToEventOpen}
+        onClose={() => setAddToEventOpen(false)}
+        onSuccess={() => { setAddToEventOpen(false); router.refresh() }}
       />
     </div>
   )

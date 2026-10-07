@@ -14,6 +14,7 @@ export type LeadWithRelations = Tables<"leads"> & {
   contacts: Tables<"contacts"> | null
   players: Tables<"players"> | null
   profiles: Pick<Tables<"profiles">, "full_name"> | null
+  event_participants: { event_id: string; events: Pick<Tables<"events">, "id" | "title" | "start_at"> | null }[]
 }
 
 export type LeadDetail = Tables<"leads"> & {
@@ -28,7 +29,7 @@ const _cachedLeads = unstable_cache(
   async (): Promise<LeadWithRelations[]> => {
     const { data } = await serviceClient
       .from("leads")
-      .select("*, contacts(*), players(*), profiles!leads_owner_id_fkey(full_name)")
+      .select("*, contacts(*), players(*), profiles!leads_owner_id_fkey(full_name), event_participants!source_lead_id(event_id, events(id, title, start_at))")
       .is("archived_at", null)
       .order("created_at", { ascending: false })
     return (data ?? []) as LeadWithRelations[]
@@ -402,4 +403,114 @@ export async function importCSVLeads(
   }
 
   return { created, merged, duplicates, errors, details }
+}
+
+// Player field detection for raw form data (same key set as LeadDetail)
+const _PLAYER_FULL = new Set(["playername","playersname","playerfullname","playersfullname","childname","childsname","childfullname","childsfullname","kidname","kidsname","kidfullname","kidsfullname","athletename","athletefullname"])
+const _PLAYER_FIRST = new Set(["playerfirstname","playersfirstname","playerfirst","childfirstname","childsfirstname","kidfirstname","athletefirstname"])
+const _PLAYER_LAST = new Set(["playerlastname","playerslastname","playerlast","childlastname","childslastname","kidlastname","athletelastname"])
+const _PLAYER_BIRTH = new Set(["birthyear","yearofbirth","playerbirthyear","playersbirthyear"])
+function _nk(k: string) { return k.toLowerCase().replace(/[^a-z0-9]/g, "") }
+
+export async function addLeadToEvent(
+  leadId: string,
+  eventId: string,
+  status: "invited" | "confirmed" | "waitlisted" = "invited"
+): Promise<{ error: string | null; alreadyInEvent?: boolean; eventTitle?: string }> {
+  await requireAdmin()
+  const [user, supabase] = await Promise.all([getAuthUser(), createClient()])
+
+  // Fetch lead + event in parallel
+  const [leadRes, eventRes] = await Promise.all([
+    supabase.from("leads").select("*, contacts(*), players(*)").eq("id", leadId).single(),
+    supabase.from("events").select("id, title, capacity").eq("id", eventId).single(),
+  ])
+  if (!leadRes.data) return { error: "Lead not found" }
+  if (!eventRes.data) return { error: "Event not found" }
+  const lead = leadRes.data as Tables<"leads"> & { contacts: Tables<"contacts"> | null; players: Tables<"players"> | null }
+  const event = eventRes.data
+
+  let playerId: string | null = lead.player_id
+  const contactId: string | null = lead.contact_id
+
+  // If no player, try to create one from raw form data
+  if (!playerId) {
+    const raw = lead.raw as Record<string, unknown> | null
+    if (raw) {
+      let firstName: string | null = null; let lastName: string | null = null; let birthYear: number | null = null
+      for (const [k, v] of Object.entries(raw)) {
+        const nk = _nk(k); const val = v ? String(v).trim() : ""
+        if (!val) continue
+        if (_PLAYER_FULL.has(nk) && !firstName) { const p = val.split(/\s+/); firstName = p[0] ?? null; lastName = p.slice(1).join(" ") || null }
+        if (_PLAYER_FIRST.has(nk) && !firstName) firstName = val
+        if (_PLAYER_LAST.has(nk) && !lastName) lastName = val
+        if (_PLAYER_BIRTH.has(nk) && !birthYear) { const n = parseInt(val); if (!isNaN(n)) birthYear = n }
+      }
+      if (firstName || lastName) {
+        const { data: newPlayer } = await supabase
+          .from("players")
+          .insert({ first_name: firstName, last_name: lastName, birth_year: birthYear, status: "prospect" })
+          .select("id").single()
+        if (newPlayer) {
+          playerId = newPlayer.id
+          if (contactId) {
+            await supabase.from("player_contacts").insert({ player_id: playerId, contact_id: contactId, relationship: "guardian", is_primary: true, is_emergency: false })
+          }
+          await supabase.from("leads").update({ player_id: playerId, updated_at: new Date().toISOString() }).eq("id", leadId)
+        }
+      }
+    }
+  }
+
+  // Check if this lead is already linked to this event
+  const [leadCheck, playerCheck] = await Promise.all([
+    supabase.from("event_participants").select("id", { count: "exact", head: true }).eq("event_id", eventId).eq("source_lead_id", leadId),
+    playerId
+      ? supabase.from("event_participants").select("id", { count: "exact", head: true }).eq("event_id", eventId).eq("player_id", playerId)
+      : Promise.resolve({ count: 0 }),
+  ])
+  if ((leadCheck.count ?? 0) > 0 || ((playerCheck as { count: number | null }).count ?? 0) > 0) {
+    return { error: null, alreadyInEvent: true, eventTitle: event.title }
+  }
+
+  // Auto-waitlist if event is at capacity
+  let finalStatus: typeof status = status
+  if (event.capacity && status === "confirmed") {
+    const { count } = await supabase
+      .from("event_participants").select("id", { count: "exact", head: true })
+      .eq("event_id", eventId).in("status", ["confirmed", "attended"])
+    if ((count ?? 0) >= event.capacity) finalStatus = "waitlisted"
+  }
+
+  const { error: partErr } = await supabase.from("event_participants").insert({
+    event_id: eventId, player_id: playerId, contact_id: contactId,
+    status: finalStatus, status_updated_at: new Date().toISOString(), source_lead_id: leadId,
+  })
+  if (partErr) return { error: partErr.message }
+
+  await logActivity({
+    type: "event_added", lead_id: leadId, event_id: eventId,
+    contact_id: contactId ?? undefined, player_id: playerId ?? undefined,
+    body: `Added to event: ${event.title}`, created_by: user?.id ?? null,
+  })
+
+  updateTag("leads")
+  updateTag("events")
+  return { error: null, eventTitle: event.title }
+}
+
+export async function bulkAddLeadsToEvent(
+  leadIds: string[],
+  eventId: string,
+  status: "invited" | "confirmed" | "waitlisted" = "invited"
+): Promise<{ added: number; skipped: number; error: string | null }> {
+  await requireAdmin()
+  let added = 0; let skipped = 0
+  for (const leadId of leadIds) {
+    const r = await addLeadToEvent(leadId, eventId, status)
+    if (r.error) return { added, skipped, error: r.error }
+    if (r.alreadyInEvent) skipped++
+    else added++
+  }
+  return { added, skipped, error: null }
 }

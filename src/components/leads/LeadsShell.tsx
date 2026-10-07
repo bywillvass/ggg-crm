@@ -17,6 +17,8 @@ import {
   ArrowLeft,
   ChevronRight,
   MapPin,
+  CalendarPlus,
+  CalendarCheck,
 } from "lucide-react"
 import {
   DndContext,
@@ -56,6 +58,7 @@ import { createContact } from "@/app/(app)/contacts/actions"
 import { createPlayer } from "@/app/(app)/players/actions"
 import type { Database, Tables } from "@/lib/database.types"
 import { phoneSearchKey, isPhoneQuery } from "@/lib/phone"
+import { AddToEventDialog } from "./AddToEventDialog"
 
 type LeadStage = Database["public"]["Enums"]["lead_stage"]
 type LeadSource = Database["public"]["Enums"]["lead_source"]
@@ -264,6 +267,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const [bulkStage, setBulkStage] = useState<LeadStage>("contacted")
   const [bulkOwner, setBulkOwner] = useState("")
   const [saving, setSaving] = useState(false)
+  const [addToEventLead, setAddToEventLead] = useState<{ id: string; name: string } | null>(null)
   const [newForm, setNewForm] = useState({
     source: "manual" as LeadSource, form_type: "", stage: "new" as LeadStage, owner_id: "",
     contact_first_name: "", contact_last_name: "", contact_email: "", contact_phone: "",
@@ -902,11 +906,12 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide">Stage</th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide hidden xl:table-cell">Owner</th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide hidden xl:table-cell">Submitted</th>
+                        <th className="w-10 px-3 py-3" />
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {paginated.length === 0 ? (
-                        <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-400">No leads found</td></tr>
+                        <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">No leads found</td></tr>
                       ) : (
                         paginated.map((lead) => (
                           <tr key={lead.id} className="hover:bg-gray-50">
@@ -929,6 +934,13 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                                   {lead.players.birth_year && <span className="text-gray-400"> ({lead.players.birth_year})</span>}
                                 </Link>
                               ) : <span className="text-gray-300">—</span>}
+                              {/* Show event badge if lead has been added to an event */}
+                              {(lead.event_participants?.length ?? 0) > 0 && (
+                                <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1">
+                                  <CalendarCheck className="h-3 w-3" />
+                                  {(lead.event_participants as { event_id: string; events: { title: string } | null }[])[0]?.events?.title}
+                                </p>
+                              )}
                             </td>
                             <td className="px-3 py-3 hidden lg:table-cell">
                               <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium", SOURCE_COLOURS[lead.source] ?? "bg-gray-100 text-gray-600 border-gray-200")}>
@@ -941,6 +953,15 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                             <td className="px-3 py-3 text-gray-500 text-xs hidden xl:table-cell">{lead.profiles?.full_name ?? "—"}</td>
                             <td className="px-3 py-3 text-gray-400 text-xs hidden xl:table-cell">
                               {format(new Date(lead.created_at), "d MMM yyyy")}
+                            </td>
+                            <td className="px-2 py-3">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setAddToEventLead({ id: lead.id, name: `${lead.contacts?.first_name ?? ""} ${lead.contacts?.last_name ?? ""}`.trim() }) }}
+                                title="Add to event"
+                                className="text-gray-300 hover:text-[#0C0F4C] transition-colors"
+                              >
+                                <CalendarPlus className="h-4 w-4" />
+                              </button>
                             </td>
                           </tr>
                         ))
@@ -1047,6 +1068,14 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AddToEventDialog
+        leadId={addToEventLead?.id ?? ""}
+        leadName={addToEventLead?.name ?? ""}
+        open={addToEventLead !== null}
+        onClose={() => setAddToEventLead(null)}
+        onSuccess={(title) => { toast.success(`Added to ${title}`); setAddToEventLead(null); router.refresh() }}
+      />
     </div>
   )
 }

@@ -16,20 +16,28 @@
  *
  * Tab naming: each ad form's leads come in on their own tab.
  * Tabs whose name starts with "_" are skipped (use "_Config", "_Notes" etc).
+ *
+ * Sheet columns used automatically:
+ *   created_time  - Meta lead creation timestamp (Unix seconds or date string).
+ *                   Used as submitted_at so "New this week" stats are correct.
+ *   form_name     - The Meta form name (e.g. "GGG TO GREECE").
+ *                   Used as form_type in the CRM instead of the tab name.
+ *   campaign_name - Stored as a filterable field in the CRM.
+ *   adset_name    - Stored as a filterable field in the CRM.
+ *   full_name     - Parent/guardian full name.
+ *   email         - Parent email.
+ *   phone_number  - Parent phone.
+ *   what_is_the_players_name?      - Player full name.
+ *   what_year_was_the_player_born? - Player birth year.
+ *   what_level_does_the_player_play_at? - Player level.
+ *   what_state_are_you_from?       - State (stored on both contact and player).
  */
 
-// Script property key prefix for last-processed row per tab
 var ROW_KEY_PREFIX = 'lastRow_';
 
 // ---------------------------------------------------------------------------
 // syncNewLeads - called by the time-driven trigger every 5 minutes
 // ---------------------------------------------------------------------------
-
-/**
- * For every non-underscore tab, reads rows after the last processed row,
- * posts them to /api/ingest in batches of 50, and advances the stored
- * row pointer only after a successful response.
- */
 function syncNewLeads() {
   var props = PropertiesService.getScriptProperties();
   var url = props.getProperty('CRM_INGEST_URL');
@@ -46,39 +54,33 @@ function syncNewLeads() {
   for (var s = 0; s < sheets.length; s++) {
     var sheet = sheets[s];
     var tabName = sheet.getName();
-
-    // Skip underscore tabs
     if (tabName.charAt(0) === '_') continue;
-
     processTab(sheet, tabName, url, secret, props);
   }
 }
 
-/**
- * Process one tab: read new rows and send to CRM.
- */
+// ---------------------------------------------------------------------------
+// processTab - read new rows from one tab and send to CRM
+// ---------------------------------------------------------------------------
 function processTab(sheet, tabName, url, secret, props) {
   var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return; // only header or empty
+  if (lastRow < 2) return;
 
   var propKey = ROW_KEY_PREFIX + tabName;
   var lastProcessed = parseInt(props.getProperty(propKey) || '1', 10);
+  if (lastProcessed >= lastRow) return;
 
-  // lastProcessed is the last data row we sent (1 = only header, no data sent yet)
-  if (lastProcessed >= lastRow) return; // nothing new
-
-  // Read headers from row 1
   var numCols = sheet.getLastColumn();
   if (numCols === 0) return;
 
-  var headerRange = sheet.getRange(1, 1, 1, numCols);
-  var headers = headerRange.getValues()[0];
+  // Read headers
+  var headers = sheet.getRange(1, 1, 1, numCols).getValues()[0];
 
-  // Detect Meta lead ID column
+  // Find the Meta lead ID column for idempotent external_id
   var metaIdCol = -1;
   for (var h = 0; h < headers.length; h++) {
-    var hLower = headers[h].toString().toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (hLower === 'id' || hLower === 'leadid' || hLower === 'leadid') {
+    var hNorm = headers[h].toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (hNorm === 'id' || hNorm === 'leadid') {
       metaIdCol = h;
       break;
     }
@@ -91,20 +93,44 @@ function processTab(sheet, tabName, url, secret, props) {
   while (currentRow <= lastRow) {
     var endRow = Math.min(currentRow + BATCH - 1, lastRow);
     var numRows = endRow - currentRow + 1;
-    var dataRange = sheet.getRange(currentRow, 1, numRows, numCols);
-    var rows = dataRange.getValues();
+    var rows = sheet.getRange(currentRow, 1, numRows, numCols).getValues();
 
     var leads = [];
     for (var r = 0; r < rows.length; r++) {
       var row = rows[r];
       var fields = {};
+
       for (var c = 0; c < headers.length; c++) {
-        if (headers[c] && row[c] !== '' && row[c] !== null && row[c] !== undefined) {
-          fields[headers[c]] = row[c].toString();
+        var hdr = headers[c];
+        var val = row[c];
+        if (hdr && val !== '' && val !== null && val !== undefined) {
+          fields[hdr] = val.toString();
         }
       }
 
-      // Build external_id
+      // --- submitted_at from created_time (fixes "New this week" stats) ---
+      // Meta stores created_time as a Unix timestamp (seconds since epoch).
+      // Google Sheets may convert it to a formatted string; handle both.
+      var submittedAt;
+      var rawCreatedTime = fields['created_time'];
+      if (rawCreatedTime) {
+        var ts = Number(rawCreatedTime);
+        if (!isNaN(ts) && ts > 1000000000) {
+          // Unix seconds -> milliseconds
+          submittedAt = new Date(ts * 1000).toISOString();
+        } else {
+          var parsed = new Date(rawCreatedTime);
+          submittedAt = isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+        }
+      } else {
+        submittedAt = new Date().toISOString();
+      }
+
+      // --- form_type from form_name column (fixes "Sheet1" label) ---
+      // Falls back to the tab name if form_name is not in the data.
+      var formType = fields['form_name'] || tabName;
+
+      // --- external_id ---
       var externalId;
       if (metaIdCol !== -1 && row[metaIdCol]) {
         externalId = 'meta:' + row[metaIdCol].toString();
@@ -115,8 +141,8 @@ function processTab(sheet, tabName, url, secret, props) {
       leads.push({
         external_id: externalId,
         source: 'meta_instant_form',
-        form_type: tabName,
-        submitted_at: new Date().toISOString(),
+        form_type: formType,
+        submitted_at: submittedAt,
         fields: fields
       });
     }
@@ -139,25 +165,19 @@ function processTab(sheet, tabName, url, secret, props) {
     var code = response.getResponseCode();
 
     if (code === 200) {
-      // Only advance pointer after a successful response
       props.setProperty(propKey, endRow.toString());
       currentRow = endRow + 1;
     } else {
       Logger.log('CRM ingest error for tab "' + tabName + '" rows ' + currentRow +
         '-' + endRow + ': HTTP ' + code + ' - ' + response.getContentText());
-      break; // stop processing this tab until next run
+      break;
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// backfillAll - resets stored row pointers and resends everything
+// backfillAll - reset row pointers and resend everything
 // ---------------------------------------------------------------------------
-
-/**
- * Resets the last-processed row for all tabs to 1 (header row),
- * then runs syncNewLeads. Safe to call repeatedly - the API is idempotent.
- */
 function backfillAll() {
   var props = PropertiesService.getScriptProperties();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -167,6 +187,7 @@ function backfillAll() {
     var tabName = sheets[s].getName();
     if (tabName.charAt(0) === '_') continue;
     props.setProperty(ROW_KEY_PREFIX + tabName, '1');
+    Logger.log('Reset row pointer for tab: ' + tabName);
   }
 
   Logger.log('All row pointers reset. Running syncNewLeads...');
@@ -175,16 +196,34 @@ function backfillAll() {
 }
 
 // ---------------------------------------------------------------------------
+// countLeadsPerTab - diagnostic: how many rows per tab vs what was sent
+// ---------------------------------------------------------------------------
+function countLeadsPerTab() {
+  var props = PropertiesService.getScriptProperties();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+
+  for (var s = 0; s < sheets.length; s++) {
+    var sheet = sheets[s];
+    var tabName = sheet.getName();
+    if (tabName.charAt(0) === '_') continue;
+
+    var lastRow = sheet.getLastRow();
+    var dataRows = Math.max(0, lastRow - 1); // subtract header row
+    var propKey = ROW_KEY_PREFIX + tabName;
+    var lastProcessed = parseInt(props.getProperty(propKey) || '1', 10);
+    var sentRows = Math.max(0, lastProcessed - 1);
+    var pendingRows = Math.max(0, dataRows - sentRows);
+
+    Logger.log('Tab "' + tabName + '": ' + dataRows + ' total rows, ' +
+      sentRows + ' sent to CRM, ' + pendingRows + ' pending');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // setupTrigger - creates the 5-minute time-driven trigger
 // ---------------------------------------------------------------------------
-
-/**
- * Creates a time-driven trigger that calls syncNewLeads every 5 minutes.
- * Removes any duplicate triggers for syncNewLeads first.
- * Run this once after pasting this script.
- */
 function setupTrigger() {
-  // Remove any existing syncNewLeads triggers
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === 'syncNewLeads') {
@@ -192,7 +231,6 @@ function setupTrigger() {
     }
   }
 
-  // Create new 5-minute trigger
   ScriptApp.newTrigger('syncNewLeads')
     .timeBased()
     .everyMinutes(5)

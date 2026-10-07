@@ -216,6 +216,7 @@ export type Database = {
       contacts: {
         Row: {
           archived_at: string | null
+          contact_type: string | null
           created_at: string
           email: string | null
           first_name: string | null
@@ -233,6 +234,7 @@ export type Database = {
         }
         Insert: {
           archived_at?: string | null
+          contact_type?: string | null
           created_at?: string
           email?: string | null
           first_name?: string | null
@@ -250,6 +252,7 @@ export type Database = {
         }
         Update: {
           archived_at?: string | null
+          contact_type?: string | null
           created_at?: string
           email?: string | null
           first_name?: string | null
@@ -1177,7 +1180,9 @@ export type Database = {
       }
       leads: {
         Row: {
+          adset_name: string | null
           archived_at: string | null
+          campaign_name: string | null
           contact_id: string | null
           created_at: string
           external_id: string | null
@@ -1195,7 +1200,9 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          adset_name?: string | null
           archived_at?: string | null
+          campaign_name?: string | null
           contact_id?: string | null
           created_at?: string
           external_id?: string | null
@@ -1213,7 +1220,9 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          adset_name?: string | null
           archived_at?: string | null
+          campaign_name?: string | null
           contact_id?: string | null
           created_at?: string
           external_id?: string | null
@@ -1387,10 +1396,12 @@ export type Database = {
           level: string | null
           medical_alerts: string | null
           notes: string | null
+          out_of_age_range: boolean | null
           photo_path: string | null
           position: string | null
           preferred_foot: string | null
           secondary_position: string | null
+          squad: string | null
           state: string | null
           status: string
           suburb: string | null
@@ -1411,10 +1422,12 @@ export type Database = {
           level?: string | null
           medical_alerts?: string | null
           notes?: string | null
+          out_of_age_range?: boolean | null
           photo_path?: string | null
           position?: string | null
           preferred_foot?: string | null
           secondary_position?: string | null
+          squad?: string | null
           state?: string | null
           status?: string
           suburb?: string | null
@@ -1435,10 +1448,12 @@ export type Database = {
           level?: string | null
           medical_alerts?: string | null
           notes?: string | null
+          out_of_age_range?: boolean | null
           photo_path?: string | null
           position?: string | null
           preferred_foot?: string | null
           secondary_position?: string | null
+          squad?: string | null
           state?: string | null
           status?: string
           suburb?: string | null

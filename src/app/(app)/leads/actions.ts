@@ -44,13 +44,18 @@ export async function listLeads(filters?: {
   owner_id?: string
   search?: string
   archived?: boolean
+  campaign_name?: string
+  adset_name?: string
+  has_player?: boolean
+  squad?: string
+  birth_year?: number
+  state?: string
 }): Promise<LeadWithRelations[]> {
   await requireAdmin()
 
   let results: LeadWithRelations[]
 
   if (filters?.archived === true) {
-    // Archived view needs rows where archived_at IS NOT NULL — skip cache
     const supabase = await createClient()
     const { data } = await supabase
       .from("leads")
@@ -78,6 +83,39 @@ export async function listLeads(filters?: {
     results = results.filter((l) => l.owner_id === filters.owner_id)
   }
 
+  if (filters?.campaign_name) {
+    const cn = filters.campaign_name.toLowerCase()
+    results = results.filter((l) => (l.campaign_name ?? "").toLowerCase().includes(cn))
+  }
+
+  if (filters?.adset_name) {
+    const an = filters.adset_name.toLowerCase()
+    results = results.filter((l) => (l.adset_name ?? "").toLowerCase().includes(an))
+  }
+
+  if (filters?.has_player === true) {
+    results = results.filter((l) => l.player_id !== null)
+  } else if (filters?.has_player === false) {
+    results = results.filter((l) => l.player_id === null)
+  }
+
+  if (filters?.squad) {
+    results = results.filter((l) => l.players?.squad === filters.squad)
+  }
+
+  if (filters?.birth_year) {
+    results = results.filter((l) => l.players?.birth_year === filters.birth_year)
+  }
+
+  if (filters?.state) {
+    const st = filters.state.toLowerCase()
+    results = results.filter(
+      (l) =>
+        (l.contacts?.state ?? "").toLowerCase() === st ||
+        (l.players?.state ?? "").toLowerCase() === st
+    )
+  }
+
   if (filters?.search) {
     const s = filters.search.toLowerCase()
     results = results.filter((l) => {
@@ -87,7 +125,9 @@ export async function listLeads(filters?: {
         contactName.includes(s) ||
         playerName.includes(s) ||
         (l.contacts?.email ?? "").toLowerCase().includes(s) ||
-        (l.contacts?.phone ?? "").toLowerCase().includes(s)
+        (l.contacts?.phone ?? "").toLowerCase().includes(s) ||
+        (l.campaign_name ?? "").toLowerCase().includes(s) ||
+        (l.form_type ?? "").toLowerCase().includes(s)
       )
     })
   }

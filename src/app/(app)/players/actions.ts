@@ -30,12 +30,14 @@ const _cachedPlayers = unstable_cache(
 
 export async function listPlayers(filters?: {
   birth_year?: number
+  squad?: string
   position?: string
   club?: string
   level?: string
   state?: string
   status?: string
   search?: string
+  out_of_age_range?: boolean
 }): Promise<Tables<"players">[]> {
   await requireAdmin()
 
@@ -43,6 +45,14 @@ export async function listPlayers(filters?: {
 
   if (filters?.birth_year) {
     results = results.filter((p) => p.birth_year === filters.birth_year)
+  }
+
+  if (filters?.squad) {
+    results = results.filter((p) => p.squad === filters.squad)
+  }
+
+  if (filters?.out_of_age_range !== undefined) {
+    results = results.filter((p) => !!p.out_of_age_range === filters.out_of_age_range)
   }
 
   if (filters?.position) {

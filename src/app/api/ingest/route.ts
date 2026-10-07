@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { serviceClient } from '@/lib/supabase/service'
-import { parsePhoneNumber } from 'libphonenumber-js'
+import {
+  nk,
+  normalizePhone,
+  buildMappedFields,
+  PARENT_KEYS,
+  type MappedFields,
+  type CustomMapping,
+} from '@/lib/ingest-fields'
 import type { Database, Json, TablesUpdate } from '@/lib/database.types'
 
 type LeadSource = Database['public']['Enums']['lead_source']
@@ -9,212 +16,9 @@ const VALID_SOURCES: LeadSource[] = [
   'website', 'meta_instant_form', 'newsletter', 'referral', 'manual', 'import', 'other',
 ]
 
-// Built-in field key (normalised) -> mapping target
-const BUILTIN: Record<string, string> = {
-  email: 'contact_email',
-  emailaddress: 'contact_email',
-  parentemail: 'contact_email',
-  guardianemail: 'contact_email',
-  phone: 'contact_phone',
-  phonenumber: 'contact_phone',
-  mobile: 'contact_phone',
-  mobilenumber: 'contact_phone',
-  parentphone: 'contact_phone',
-  fullname: 'contact_full_name',
-  parentname: 'contact_full_name',
-  guardianname: 'contact_full_name',
-  name: 'contact_full_name',
-  firstname: 'contact_first_name',
-  parentfirstname: 'contact_first_name',
-  lastname: 'contact_last_name',
-  parentlastname: 'contact_last_name',
-  surname: 'contact_last_name',
-  // Player name — full
-  playername: 'player_full_name',
-  playersname: 'player_full_name',
-  playerfullname: 'player_full_name',
-  playersfullname: 'player_full_name',
-  childname: 'player_full_name',
-  childsname: 'player_full_name',
-  childfullname: 'player_full_name',
-  childsfullname: 'player_full_name',
-  kidname: 'player_full_name',
-  kidsname: 'player_full_name',
-  kidfullname: 'player_full_name',
-  kidsfullname: 'player_full_name',
-  athletename: 'player_full_name',
-  athletefullname: 'player_full_name',
-  // Player name — first / last
-  playerfirstname: 'player_first_name',
-  playersfirstname: 'player_first_name',
-  playerfirst: 'player_first_name',
-  childfirstname: 'player_first_name',
-  childsfirstname: 'player_first_name',
-  kidfirstname: 'player_first_name',
-  athletefirstname: 'player_first_name',
-  playerlastname: 'player_last_name',
-  playerslastname: 'player_last_name',
-  playerlast: 'player_last_name',
-  childlastname: 'player_last_name',
-  childslastname: 'player_last_name',
-  kidlastname: 'player_last_name',
-  athletelastname: 'player_last_name',
-  // DOB / birth year
-  dob: 'player_dob',
-  dateofbirth: 'player_dob',
-  birthdate: 'player_dob',
-  playerdob: 'player_dob',
-  playersdob: 'player_dob',
-  playersdateofbirth: 'player_dob',
-  childdob: 'player_dob',
-  kiddob: 'player_dob',
-  birthyear: 'player_birth_year',
-  yearofbirth: 'player_birth_year',
-  playerbirthyear: 'player_birth_year',
-  playersbirthyear: 'player_birth_year',
-  playersyearofbirth: 'player_birth_year',
-  // Club / team
-  club: 'player_club',
-  currentclub: 'player_club',
-  playerclub: 'player_club',
-  team: 'player_club',
-  currentteam: 'player_club',
-  playerteam: 'player_club',
-  // Position / level
-  position: 'player_position',
-  playerposition: 'player_position',
-  level: 'player_level',
-  league: 'player_level',
-  suburb: 'suburb',
-  city: 'suburb',
-  state: 'state',
-  message: 'message',
-  comments: 'message',
-  enquiry: 'message',
-  notes: 'message',
-  campaignname: 'campaign',
-  adname: 'campaign',
-  adsetname: 'campaign',
-  formname: 'campaign',
-}
-
-// Normalised keys that indicate the contact is a parent/guardian (not the player)
-const PARENT_KEYS = new Set([
-  'parentname', 'guardianname', 'parentguardianname', 'parentguardian',
-  'guardiansname', 'parentemail', 'guardianemail', 'parentguardianemail',
-  'parentphone', 'guardianphone', 'parentguardianphone',
-  'parentfirstname', 'guardianfirstname', 'parentlastname', 'guardianlastname',
-])
-
-function nk(key: string): string {
-  return key.toLowerCase().replace(/[^a-z0-9]/g, '')
-}
-
-function normalizePhone(raw: string): string | null {
-  try {
-    const parsed = parsePhoneNumber(raw, 'AU')
-    if (parsed?.isValid()) return parsed.format('E.164')
-  } catch {
-    // ignore parse errors
-  }
-  return null
-}
-
-function splitName(full: string): [string, string] {
-  const parts = full.trim().split(/\s+/)
-  if (parts.length === 1) return [parts[0], '']
-  return [parts[0], parts.slice(1).join(' ')]
-}
-
-interface MappedFields {
-  contact_email?: string
-  contact_phone?: string
-  contact_first_name?: string
-  contact_last_name?: string
-  player_first_name?: string
-  player_last_name?: string
-  player_dob?: string
-  player_birth_year?: string
-  player_club?: string
-  player_position?: string
-  player_level?: string
-  suburb?: string
-  state?: string
-  message?: string
-  source_detail?: string
-}
-
-type CustomMapping = { source_key: string; target: string; form_type: string | null }
-
-function buildMappedFields(
-  rawFields: Record<string, unknown>,
-  customMappings: CustomMapping[],
-  formType: string | null | undefined
-): { mapped: MappedFields; hasParentField: boolean } {
-  // Build lookup: normalised key -> target (global first, then form-specific overwrites)
-  const lookup: Record<string, string> = {}
-  for (const row of customMappings) {
-    if (!row.form_type) lookup[nk(row.source_key)] = row.target
-  }
-  for (const row of customMappings) {
-    if (row.form_type === formType) lookup[nk(row.source_key)] = row.target
-  }
-
-  const mapped: MappedFields = {}
-  let hasParentField = false
-
-  for (const [rawKey, rawValue] of Object.entries(rawFields)) {
-    const value = rawValue?.toString().trim()
-    if (!value) continue
-    const normalizedKey = nk(rawKey)
-    if (PARENT_KEYS.has(normalizedKey)) hasParentField = true
-    const target = lookup[normalizedKey] ?? BUILTIN[normalizedKey]
-    if (!target) continue
-
-    if (target === 'contact_email' && !mapped.contact_email) {
-      mapped.contact_email = value.toLowerCase()
-    } else if (target === 'contact_phone' && !mapped.contact_phone) {
-      mapped.contact_phone = value
-    } else if (target === 'contact_full_name') {
-      const [fn, ln] = splitName(value)
-      if (!mapped.contact_first_name) mapped.contact_first_name = fn
-      if (!mapped.contact_last_name && ln) mapped.contact_last_name = ln
-    } else if (target === 'contact_first_name' && !mapped.contact_first_name) {
-      mapped.contact_first_name = value
-    } else if (target === 'contact_last_name' && !mapped.contact_last_name) {
-      mapped.contact_last_name = value
-    } else if (target === 'player_full_name') {
-      const [fn, ln] = splitName(value)
-      if (!mapped.player_first_name) mapped.player_first_name = fn
-      if (!mapped.player_last_name && ln) mapped.player_last_name = ln
-    } else if (target === 'player_first_name' && !mapped.player_first_name) {
-      mapped.player_first_name = value
-    } else if (target === 'player_last_name' && !mapped.player_last_name) {
-      mapped.player_last_name = value
-    } else if (target === 'player_dob' && !mapped.player_dob) {
-      mapped.player_dob = value
-    } else if (target === 'player_birth_year' && !mapped.player_birth_year) {
-      mapped.player_birth_year = value
-    } else if (target === 'player_club' && !mapped.player_club) {
-      mapped.player_club = value
-    } else if (target === 'player_position' && !mapped.player_position) {
-      mapped.player_position = value
-    } else if (target === 'player_level' && !mapped.player_level) {
-      mapped.player_level = value
-    } else if (target === 'suburb' && !mapped.suburb) {
-      mapped.suburb = value
-    } else if (target === 'state' && !mapped.state) {
-      mapped.state = value
-    } else if (target === 'message' && !mapped.message) {
-      mapped.message = value
-    } else if (target === 'campaign' && !mapped.source_detail) {
-      mapped.source_detail = value
-    }
-  }
-
-  return { mapped, hasParentField }
-}
-
+// ---------------------------------------------------------------------------
+// Newsletter contact upsert (no lead created)
+// ---------------------------------------------------------------------------
 async function upsertNewsletterContact(
   mapped: MappedFields,
   source: LeadSource
@@ -245,7 +49,6 @@ async function upsertNewsletterContact(
     }
   }
 
-  // Create new contact
   const e164 = mapped.contact_phone ? normalizePhone(mapped.contact_phone) : null
   const { data: newContact, error } = await serviceClient
     .from('contacts')
@@ -256,6 +59,7 @@ async function upsertNewsletterContact(
       phone: e164,
       marketing_consent: 'express',
       source,
+      contact_type: 'other',
       tags: ['newsletter'],
     })
     .select('id')
@@ -273,11 +77,23 @@ async function upsertNewsletterContact(
   return newContact.id
 }
 
+// ---------------------------------------------------------------------------
+// Find or create the parent contact
+// ---------------------------------------------------------------------------
 async function findOrCreateContact(
   mapped: MappedFields,
   source: LeadSource
 ): Promise<{ contactId: string; isNew: boolean }> {
-  let existing: { id: string; first_name: string | null; last_name: string | null; phone: string | null; suburb: string | null; state: string | null; notes: string | null } | null = null
+  type ContactRow = {
+    id: string
+    first_name: string | null
+    last_name: string | null
+    phone: string | null
+    suburb: string | null
+    state: string | null
+    notes: string | null
+  }
+  let existing: ContactRow | null = null
 
   if (mapped.contact_email) {
     const { data } = await serviceClient
@@ -303,6 +119,7 @@ async function findOrCreateContact(
   }
 
   if (existing) {
+    // Fill empty fields only — never overwrite
     const updates: TablesUpdate<'contacts'> = {}
     if (!existing.first_name && mapped.contact_first_name)
       updates.first_name = mapped.contact_first_name
@@ -334,6 +151,7 @@ async function findOrCreateContact(
       state: mapped.state ?? null,
       notes: mapped.message ?? null,
       source,
+      contact_type: 'parent',
       tags: [],
     })
     .select('id')
@@ -343,15 +161,19 @@ async function findOrCreateContact(
   return { contactId: newContact.id, isNew: true }
 }
 
+// ---------------------------------------------------------------------------
+// Find or create the player and guardian link
+// ---------------------------------------------------------------------------
 async function findOrCreatePlayer(
   mapped: MappedFields,
   contactId: string,
-  hasParentField: boolean
+  isParent: boolean
 ): Promise<string> {
   const firstName = mapped.player_first_name ?? null
   const lastName = mapped.player_last_name ?? null
   const birthYearNum = mapped.player_birth_year ? parseInt(mapped.player_birth_year, 10) : null
 
+  // Try to find an existing player linked to this contact
   if (firstName && birthYearNum) {
     const { data: linked } = await serviceClient
       .from('player_contacts')
@@ -375,6 +197,7 @@ async function findOrCreatePlayer(
     }
   }
 
+  // Create new player
   const { data: newPlayer, error } = await serviceClient
     .from('players')
     .insert({
@@ -385,6 +208,7 @@ async function findOrCreatePlayer(
       current_club: mapped.player_club ?? null,
       position: mapped.player_position ?? null,
       level: mapped.player_level ?? null,
+      state: mapped.state ?? null,
       status: 'prospect',
     })
     .select('id')
@@ -392,7 +216,8 @@ async function findOrCreatePlayer(
 
   if (error) throw new Error(`Failed to create player: ${error.message}`)
 
-  const relationship = hasParentField ? 'guardian' : 'self'
+  // Guardian link — isParent true when contact and player are different people
+  const relationship = isParent ? 'guardian' : 'self'
   await serviceClient.from('player_contacts').insert({
     player_id: newPlayer.id,
     contact_id: contactId,
@@ -404,6 +229,9 @@ async function findOrCreatePlayer(
   return newPlayer.id
 }
 
+// ---------------------------------------------------------------------------
+// Process one lead from the ingest payload
+// ---------------------------------------------------------------------------
 interface IngestLeadInput {
   external_id?: string | null
   source?: string | null
@@ -426,7 +254,7 @@ async function processOneLead(
 ): Promise<IngestResult> {
   const externalId = input.external_id ?? null
 
-  // Idempotency check
+  // Idempotency: never process the same external_id twice
   if (externalId) {
     const { data: existing } = await serviceClient
       .from('ingest_log')
@@ -435,12 +263,7 @@ async function processOneLead(
       .maybeSingle()
 
     if (existing) {
-      return {
-        external_id: externalId,
-        status: 'duplicate',
-        lead_id: existing.lead_id,
-        error: null,
-      }
+      return { external_id: externalId, status: 'duplicate', lead_id: existing.lead_id, error: null }
     }
   }
 
@@ -454,7 +277,7 @@ async function processOneLead(
 
   const { mapped, hasParentField } = buildMappedFields(rawFields, customMappings, formType)
 
-  // Newsletter: no lead, upsert contact only
+  // Newsletter: no lead, just upsert contact
   if (formType?.toLowerCase() === 'newsletter') {
     await upsertNewsletterContact(mapped, source)
     await serviceClient.from('ingest_log').insert({
@@ -469,24 +292,34 @@ async function processOneLead(
     return { external_id: externalId ?? '', status: 'created', lead_id: null, error: null }
   }
 
-  // Find or create contact
+  // Determine if contact is a parent:
+  //   - explicit parent key in the form (parentname, guardianemail, etc.), OR
+  //   - both a contact name AND a player name were supplied (two different people)
+  const hasPlayerData = !!(mapped.player_first_name || mapped.player_last_name)
+  const contactHasName = !!(mapped.contact_first_name || mapped.contact_last_name)
+  const isParent = hasParentField || (hasPlayerData && contactHasName)
+
+  // Find or create parent contact
   const { contactId, isNew: isNewContact } = await findOrCreateContact(mapped, source)
 
-  // Find or create player if player data present
+  // Find or create player if player data is present
   let playerId: string | null = null
-  if (mapped.player_first_name || mapped.player_last_name) {
-    playerId = await findOrCreatePlayer(mapped, contactId, hasParentField)
+  if (hasPlayerData) {
+    playerId = await findOrCreatePlayer(mapped, contactId, isParent)
   }
 
-  // Payload source_detail takes precedence over field-mapped campaign value
-  // Treat empty string as null (Apps Script passes '' when no page field is set)
-  const sourceDetail = input.source_detail || mapped.source_detail || null
+  // form_name from the submission overrides the form_type sent in the payload
+  // (fixes Meta "Sheet1" tab name being used instead of real form name)
+  const resolvedFormType = mapped.form_name || formType
+
+  // source_detail: explicit payload value > campaign_name > legacy source_detail
+  const sourceDetail = input.source_detail || mapped.campaign_name || mapped.source_detail || null
 
   const { data: leadData, error: leadError } = await serviceClient
     .from('leads')
     .insert({
       source,
-      form_type: formType,
+      form_type: resolvedFormType,
       source_detail: sourceDetail,
       external_id: externalId,
       raw: rawFields as Json,
@@ -494,6 +327,8 @@ async function processOneLead(
       player_id: playerId,
       stage: 'new',
       submitted_at: submittedAt,
+      campaign_name: mapped.campaign_name ?? null,
+      adset_name: mapped.adset_name ?? null,
     })
     .select('id')
     .single()
@@ -505,7 +340,7 @@ async function processOneLead(
     contact_id: contactId,
     player_id: playerId,
     lead_id: leadData.id,
-    body: `Lead received from ${source}${formType ? ` (${formType})` : ''}`,
+    body: `Lead received from ${source}${resolvedFormType ? ` (${resolvedFormType})` : ''}`,
     created_by: null,
   })
 
@@ -515,20 +350,18 @@ async function processOneLead(
     received_at: submittedAt,
     external_id: externalId,
     source,
-    form_type: formType,
+    form_type: resolvedFormType,
     status,
     error: null,
     lead_id: leadData.id,
   })
 
-  return {
-    external_id: externalId ?? '',
-    status,
-    lead_id: leadData.id,
-    error: null,
-  }
+  return { external_id: externalId ?? '', status, lead_id: leadData.id, error: null }
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/ingest
+// ---------------------------------------------------------------------------
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const ingestSecret = req.headers.get('x-ingest-secret')
   if (!ingestSecret || ingestSecret !== process.env.INGEST_SECRET) {
@@ -546,7 +379,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Missing leads array' }, { status: 400 })
   }
 
-  // Load custom mappings once for all leads in this batch
+  // Load custom mappings once for the whole batch
   const { data: customMappings } = await serviceClient
     .from('ingest_field_mappings')
     .select('source_key, target, form_type')
@@ -558,12 +391,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       results.push(result)
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
-      results.push({
-        external_id: lead.external_id ?? '',
-        status: 'error',
-        lead_id: null,
-        error: errMsg,
-      })
+      results.push({ external_id: lead.external_id ?? '', status: 'error', lead_id: null, error: errMsg })
       await serviceClient.from('ingest_log').insert({
         received_at: lead.submitted_at ?? new Date().toISOString(),
         external_id: lead.external_id ?? null,

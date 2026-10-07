@@ -120,8 +120,10 @@ export function EventParticipantsTab({
       list = list.filter((p) => {
         const name = participantName(p).toLowerCase()
         const contact = primaryContact(p)
+        const contactName = `${contact?.first_name ?? ""} ${contact?.last_name ?? ""}`.toLowerCase()
         return (
           name.includes(s) ||
+          contactName.trim().includes(s) ||
           (contact?.email ?? "").toLowerCase().includes(s) ||
           (contact?.phone ?? "").toLowerCase().includes(s)
         )

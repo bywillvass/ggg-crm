@@ -14,10 +14,35 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/components/providers/AuthProvider'
 
+type ParentInfo = { first_name: string | null; last_name: string | null; phone: string | null } | null
+type PlayerInfo = { id: string; first_name: string | null; last_name: string | null; birth_year: number | null } | null
+
 type SearchResult = {
-  contacts: { id: string; first_name: string | null; last_name: string | null; email: string | null }[]
-  players: { id: string; first_name: string | null; last_name: string | null; birth_year: number | null; position: string | null }[]
-  leads: { id: string; source: string; stage: string; contacts: { first_name: string | null; last_name: string | null } | null }[]
+  contacts: {
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+    phone: string | null
+    contact_type: string | null
+    players: PlayerInfo[]
+  }[]
+  players: {
+    id: string
+    first_name: string | null
+    last_name: string | null
+    birth_year: number | null
+    position: string | null
+    parent: ParentInfo
+  }[]
+  leads: {
+    id: string
+    source: string
+    stage: string
+    form_type: string | null
+    contacts: { first_name: string | null; last_name: string | null } | null
+    players: { first_name: string | null; last_name: string | null } | null
+  }[]
   events: { id: string; title: string; start_at: string }[]
 }
 
@@ -35,12 +60,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   const initials = user.email?.slice(0, 2).toUpperCase() ?? 'U'
 
   const fetchResults = useCallback(async (q: string) => {
-    if (q.length < 2) {
-      setResults(null)
-      setOpen(false)
-      return
-    }
-
+    if (q.length < 2) { setResults(null); setOpen(false); return }
     setLoading(true)
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
@@ -49,9 +69,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
         setResults(data)
         setOpen(true)
       }
-    } catch {
-      // ignore
-    } finally {
+    } catch { /* ignore */ } finally {
       setLoading(false)
     }
   }, [])
@@ -59,33 +77,40 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const q = e.target.value
     setQuery(q)
-
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => fetchResults(q), 250)
+    debounceRef.current = setTimeout(() => fetchResults(q), 300)
   }
+
+  // Cmd+K / Ctrl+K focuses the search input
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      }
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
   function handleSelect(href: string) {
-    setOpen(false)
-    setQuery('')
-    setResults(null)
+    setOpen(false); setQuery(''); setResults(null)
     router.push(href)
   }
 
   const hasResults = results && (
-    results.contacts.length > 0 ||
-    results.players.length > 0 ||
-    results.leads.length > 0 ||
-    results.events.length > 0
+    results.contacts.length > 0 || results.players.length > 0 ||
+    results.leads.length > 0 || results.events.length > 0
   )
 
   async function signOut() {
@@ -112,7 +137,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
             value={query}
             onChange={handleChange}
             onFocus={() => { if (results && query.length >= 2) setOpen(true) }}
-            placeholder="Search..."
+            placeholder="Search… ⌘K"
             className="flex-1 bg-transparent outline-none text-gray-700 placeholder:text-gray-400"
           />
           {loading && (
@@ -121,48 +146,55 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
         </div>
 
         {open && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-lg border shadow-lg z-50 overflow-hidden max-h-96 overflow-y-auto">
+          <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-lg border shadow-lg z-50 overflow-hidden max-h-[28rem] overflow-y-auto">
             {!hasResults ? (
               <p className="px-4 py-3 text-sm text-gray-400">No results for &quot;{query}&quot;</p>
             ) : (
               <>
-                {results.contacts.length > 0 && (
+                {results.players.length > 0 && (
                   <div>
-                    <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 bg-gray-50">Contacts</p>
-                    {results.contacts.map((c) => (
-                      <button
-                        key={c.id}
-                        onClick={() => handleSelect(`/contacts/${c.id}`)}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-2"
-                      >
+                    <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 bg-gray-50">Players</p>
+                    {results.players.map((p) => (
+                      <button key={p.id} onClick={() => handleSelect(`/players/${p.id}`)}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-2">
                         <div className="h-6 w-6 rounded-full bg-[#0C0F4C] text-white text-xs flex items-center justify-center shrink-0">
-                          {((c.first_name ?? '?')[0] + (c.last_name ?? '?')[0]).toUpperCase()}
+                          {((p.first_name ?? '?')[0] + (p.last_name ?? '?')[0]).toUpperCase()}
                         </div>
-                        <div>
-                          <p className="text-sm font-medium">{c.first_name} {c.last_name}</p>
-                          {c.email && <p className="text-xs text-gray-400">{c.email}</p>}
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{p.first_name} {p.last_name}</p>
+                          <p className="text-xs text-gray-400">
+                            {[p.birth_year, p.position].filter(Boolean).join(' · ')}
+                            {p.parent && (
+                              <span className="ml-1 text-gray-400">
+                                · {p.parent.first_name} {p.parent.last_name}
+                                {p.parent.phone && ` · ${p.parent.phone}`}
+                              </span>
+                            )}
+                          </p>
                         </div>
                       </button>
                     ))}
                   </div>
                 )}
 
-                {results.players.length > 0 && (
+                {results.contacts.length > 0 && (
                   <div>
-                    <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 bg-gray-50">Players</p>
-                    {results.players.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => handleSelect(`/players/${p.id}`)}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-2"
-                      >
-                        <div className="h-6 w-6 rounded-full bg-[#0C0F4C] text-white text-xs flex items-center justify-center shrink-0">
-                          {((p.first_name ?? '?')[0] + (p.last_name ?? '?')[0]).toUpperCase()}
+                    <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 bg-gray-50">Parents</p>
+                    {results.contacts.map((c) => (
+                      <button key={c.id} onClick={() => handleSelect(`/contacts/${c.id}`)}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-2">
+                        <div className="h-6 w-6 rounded-full bg-gray-400 text-white text-xs flex items-center justify-center shrink-0">
+                          {((c.first_name ?? '?')[0] + (c.last_name ?? '?')[0]).toUpperCase()}
                         </div>
-                        <div>
-                          <p className="text-sm font-medium">{p.first_name} {p.last_name}</p>
-                          <p className="text-xs text-gray-400">
-                            {p.birth_year && `${p.birth_year} - `}{p.position ?? 'No position'}
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{c.first_name} {c.last_name}</p>
+                          <p className="text-xs text-gray-400 truncate">
+                            {c.email ?? c.phone ?? ''}
+                            {c.players.length > 0 && (
+                              <span className="ml-1">
+                                · {c.players.map((pl) => `${pl?.first_name ?? ''} ${pl?.last_name ?? ''}`.trim()).filter(Boolean).join(', ')}
+                              </span>
+                            )}
                           </p>
                         </div>
                       </button>
@@ -174,15 +206,15 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
                   <div>
                     <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 bg-gray-50">Leads</p>
                     {results.leads.map((l) => (
-                      <button
-                        key={l.id}
-                        onClick={() => handleSelect(`/leads/${l.id}`)}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-50"
-                      >
+                      <button key={l.id} onClick={() => handleSelect(`/leads/${l.id}`)}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-50">
                         <p className="text-sm font-medium">
                           {l.contacts?.first_name} {l.contacts?.last_name}
+                          {l.players && <span className="text-gray-400 font-normal"> · {l.players.first_name} {l.players.last_name}</span>}
                         </p>
-                        <p className="text-xs text-gray-400">{l.source.replace('_', ' ')} - {l.stage}</p>
+                        <p className="text-xs text-gray-400">
+                          {l.form_type ?? l.source.replace('_', ' ')} · {l.stage}
+                        </p>
                       </button>
                     ))}
                   </div>
@@ -192,11 +224,8 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
                   <div>
                     <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 bg-gray-50">Events</p>
                     {results.events.map((e) => (
-                      <button
-                        key={e.id}
-                        onClick={() => handleSelect(`/events/${e.id}`)}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-50"
-                      >
+                      <button key={e.id} onClick={() => handleSelect(`/events/${e.id}`)}
+                        className="w-full text-left px-4 py-2 hover:bg-gray-50">
                         <p className="text-sm font-medium">{e.title}</p>
                       </button>
                     ))}
@@ -212,9 +241,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
         <DropdownMenu>
           <DropdownMenuTrigger className="rounded-full outline-none focus:ring-2 focus:ring-[#C9A227]">
             <Avatar className="w-8 h-8">
-              <AvatarFallback className="bg-[#0C0F4C] text-white text-xs">
-                {initials}
-              </AvatarFallback>
+              <AvatarFallback className="bg-[#0C0F4C] text-white text-xs">{initials}</AvatarFallback>
             </Avatar>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
@@ -222,13 +249,9 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
               <p className="text-xs text-gray-500 truncate">{user.email}</p>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => router.push('/settings/account')}>
-              My account
-            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push('/settings/account')}>My account</DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={signOut} className="text-red-600">
-              Sign out
-            </DropdownMenuItem>
+            <DropdownMenuItem onClick={signOut} className="text-red-600">Sign out</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

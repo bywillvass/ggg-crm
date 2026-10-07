@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import { toast } from "sonner"
 import { format } from "date-fns"
@@ -55,6 +55,7 @@ import {
 import { createContact } from "@/app/(app)/contacts/actions"
 import { createPlayer } from "@/app/(app)/players/actions"
 import type { Database, Tables } from "@/lib/database.types"
+import { phoneSearchKey, isPhoneQuery } from "@/lib/phone"
 
 type LeadStage = Database["public"]["Enums"]["lead_stage"]
 type LeadSource = Database["public"]["Enums"]["lead_source"]
@@ -229,14 +230,31 @@ type Props = { leads: LeadWithRelations[]; profiles: Tables<"profiles">[] }
 
 export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const router = useRouter()
-  const [view, setView] = useState<ViewMode>("overview")
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const [view, setView] = useState<ViewMode>(() => {
+    const v = searchParams.get("view")
+    return (v === "board" || v === "table") ? v : "overview"
+  })
   const [leads, setLeads] = useState(initialLeads)
-  const [search, setSearch] = useState("")
-  const [filterSource, setFilterSource] = useState("")
-  const [filterStage, setFilterStage] = useState("")
-  const [filterOwner, setFilterOwner] = useState("")
-  const [filterFormType, setFilterFormType] = useState("")
-  const [filterCity, setFilterCity] = useState("")
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "")
+  const [filterSource, setFilterSource] = useState(() => {
+    const f = searchParams.get("form") ?? ""
+    return f.includes("|||") ? (f.split("|||")[1] ?? "") : ""
+  })
+  const [filterStage, setFilterStage] = useState(() => searchParams.get("stage") ?? "")
+  const [filterOwner, setFilterOwner] = useState(() => searchParams.get("owner") ?? "")
+  const [filterFormType, setFilterFormType] = useState(() => {
+    const f = searchParams.get("form") ?? ""
+    return f.includes("|||") ? (f.split("|||")[0] ?? "") : ""
+  })
+  const [filterCity, setFilterCity] = useState(() => searchParams.get("city") ?? "")
+  const [filterBirthYear, setFilterBirthYear] = useState(() => searchParams.get("year") ?? "")
+  const [filterSquad, setFilterSquad] = useState(() => searchParams.get("squad") ?? "")
+  const [filterState, setFilterState] = useState(() => searchParams.get("st") ?? "")
+  const [filterLevel, setFilterLevel] = useState(() => searchParams.get("level") ?? "")
+  const [filterCampaign, setFilterCampaign] = useState(() => searchParams.get("campaign") ?? "")
+  const [filterHasPlayer, setFilterHasPlayer] = useState(() => searchParams.get("player") ?? "")
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [activeDrag, setActiveDrag] = useState<LeadWithRelations | null>(null)
@@ -251,6 +269,52 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     contact_first_name: "", contact_last_name: "", contact_email: "", contact_phone: "",
     player_first_name: "", player_last_name: "", player_birth_year: "", player_position: "", player_club: "", notes: "",
   })
+
+  function updateURL(overrides: Partial<{
+    q: string; stage: string; owner: string; city: string; form: string
+    year: string; squad: string; st: string; level: string; campaign: string; player: string; view: string
+  }>) {
+    const cur = {
+      q: search, stage: filterStage, owner: filterOwner, city: filterCity,
+      form: filterFormType || filterSource ? `${filterFormType}|||${filterSource}` : "",
+      year: filterBirthYear, squad: filterSquad, st: filterState,
+      level: filterLevel, campaign: filterCampaign, player: filterHasPlayer,
+      view: view === "overview" ? "" : view,
+    }
+    const merged = { ...cur, ...overrides }
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(merged)) {
+      if (v) params.set(k, v)
+    }
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }
+
+  const availableBirthYears = useMemo(() =>
+    [...new Set(leads.flatMap(l => l.players?.birth_year ? [l.players.birth_year] : []))].sort((a, b) => b - a),
+    [leads]
+  )
+  const availableSquads = useMemo(() =>
+    [...new Set(leads.flatMap(l => l.players?.squad ? [l.players.squad] : []))].sort(),
+    [leads]
+  )
+  const availableStates = useMemo(() =>
+    [...new Set(leads.flatMap(l => {
+      const s: string[] = []
+      if (l.contacts?.state) s.push(l.contacts.state)
+      if (l.players?.state) s.push(l.players.state)
+      return s
+    }))].sort(),
+    [leads]
+  )
+  const availableLevels = useMemo(() =>
+    [...new Set(leads.flatMap(l => l.players?.level ? [l.players.level] : []))].sort(),
+    [leads]
+  )
+  const availableCampaigns = useMemo(() =>
+    [...new Set(leads.flatMap(l => l.campaign_name ? [l.campaign_name] : []))].sort(),
+    [leads]
+  )
 
   // Derived stats
   const now = Date.now()
@@ -317,20 +381,44 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const filtered = useMemo(() => {
     let result = leads
     if (search) {
-      const s = search.toLowerCase()
-      result = result.filter((l) => {
-        const cn = `${l.contacts?.first_name ?? ""} ${l.contacts?.last_name ?? ""} ${l.contacts?.email ?? ""}`.toLowerCase()
-        const pn = `${l.players?.first_name ?? ""} ${l.players?.last_name ?? ""}`.toLowerCase()
-        return cn.includes(s) || pn.includes(s)
-      })
+      if (isPhoneQuery(search)) {
+        const phoneKey = phoneSearchKey(search)
+        result = result.filter((l) => {
+          const digits = (l.contacts?.phone ?? "").replace(/\D/g, "")
+          return phoneKey.length >= 7 && digits.includes(phoneKey)
+        })
+      } else {
+        const words = search.toLowerCase().split(/\s+/).filter(Boolean)
+        result = result.filter((l) => {
+          const combined = [
+            l.contacts?.first_name, l.contacts?.last_name, l.contacts?.email, l.contacts?.phone,
+            l.players?.first_name, l.players?.last_name,
+            l.campaign_name, l.form_type,
+          ].filter(Boolean).join(" ").toLowerCase()
+          return words.every((w) => combined.includes(w))
+        })
+      }
     }
     if (filterSource) result = result.filter((l) => l.source === filterSource)
     if (filterStage) result = result.filter((l) => l.stage === filterStage)
     if (filterOwner) result = result.filter((l) => l.owner_id === filterOwner)
     if (filterFormType) result = result.filter((l) => (l.form_type ?? "unknown") === filterFormType)
     if (filterCity) result = result.filter((l) => getCityFromLead(l) === filterCity)
+    if (filterBirthYear) result = result.filter((l) => l.players?.birth_year === parseInt(filterBirthYear))
+    if (filterSquad) result = result.filter((l) => l.players?.squad === filterSquad)
+    if (filterState) {
+      const st = filterState.toLowerCase()
+      result = result.filter((l) =>
+        (l.contacts?.state ?? "").toLowerCase() === st ||
+        (l.players?.state ?? "").toLowerCase() === st
+      )
+    }
+    if (filterLevel) result = result.filter((l) => l.players?.level === filterLevel)
+    if (filterCampaign) result = result.filter((l) => (l.campaign_name ?? "").toLowerCase().includes(filterCampaign.toLowerCase()))
+    if (filterHasPlayer === "yes") result = result.filter((l) => l.player_id != null)
+    if (filterHasPlayer === "no") result = result.filter((l) => l.player_id == null)
     return result
-  }, [leads, search, filterSource, filterStage, filterOwner, filterFormType, filterCity])
+  }, [leads, search, filterSource, filterStage, filterOwner, filterFormType, filterCity, filterBirthYear, filterSquad, filterState, filterLevel, filterCampaign, filterHasPlayer])
 
   const boardLeads = useMemo(() => {
     const cols: Record<LeadStage, LeadWithRelations[]> = {
@@ -344,23 +432,38 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   function drillIntoForm(formType: string, source: string) {
-    setFilterFormType(formType); setFilterSource(source); setFilterStage(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
+    setFilterFormType(formType); setFilterSource(source); setFilterStage(""); setFilterCity(""); setSearch("")
+    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
+    setPage(1); setView("table")
+    updateURL({ form: `${formType}|||${source}`, stage: "", city: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
   }
 
   function drillIntoFormCity(formType: string, source: string, city: string) {
-    setFilterFormType(formType); setFilterSource(source); setFilterCity(city); setFilterStage(""); setSearch(""); setPage(1); setView("table")
+    setFilterFormType(formType); setFilterSource(source); setFilterCity(city); setFilterStage(""); setSearch("")
+    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
+    setPage(1); setView("table")
+    updateURL({ form: `${formType}|||${source}`, city, stage: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
   }
 
   function drillIntoStage(stage: string) {
-    setFilterStage(stage); setFilterSource(""); setFilterFormType(""); setFilterCity(""); setSearch(""); setPage(1); setView("table")
+    setFilterStage(stage); setFilterSource(""); setFilterFormType(""); setFilterCity(""); setSearch("")
+    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
+    setPage(1); setView("table")
+    updateURL({ stage, form: "", city: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
   }
 
   function drillIntoCity(city: string) {
-    setFilterCity(city); setFilterSource(""); setFilterStage(""); setFilterFormType(""); setSearch(""); setPage(1); setView("table")
+    setFilterCity(city); setFilterSource(""); setFilterStage(""); setFilterFormType(""); setSearch("")
+    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
+    setPage(1); setView("table")
+    updateURL({ city, form: "", stage: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
   }
 
   function goToOverview() {
-    setFilterSource(""); setFilterStage(""); setFilterFormType(""); setFilterCity(""); setSearch(""); setPage(1); setView("overview")
+    setFilterSource(""); setFilterStage(""); setFilterFormType(""); setFilterCity(""); setSearch("")
+    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
+    setPage(1); setView("overview")
+    router.replace(pathname, { scroll: false })
   }
 
   // Kanban drag
@@ -454,6 +557,11 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     if (filterFormType) parts.push(formatFormType(filterFormType === "unknown" ? "No form type" : filterFormType))
     if (filterSource) parts.push(SOURCE_LABELS[filterSource] ?? filterSource)
     if (filterCity) parts.push(filterCity)
+    if (filterBirthYear) parts.push(filterBirthYear)
+    if (filterSquad) parts.push(filterSquad)
+    if (filterState) parts.push(filterState)
+    if (filterLevel) parts.push(filterLevel)
+    if (filterCampaign) parts.push(filterCampaign)
     if (parts.length) return parts.join(" · ")
     if (filterStage) return STAGE_LABELS[filterStage] ?? filterStage
     return null
@@ -478,10 +586,10 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
         <div className="flex items-center gap-2">
           {view !== "overview" && (
             <div className="flex rounded-lg border overflow-hidden">
-              <button onClick={() => setView("board")} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "board" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
+              <button onClick={() => { setView("board"); updateURL({ view: "board" }) }} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "board" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
                 <LayoutGrid className="h-3.5 w-3.5" /> Board
               </button>
-              <button onClick={() => setView("table")} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "table" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
+              <button onClick={() => { setView("table"); updateURL({ view: "table" }) }} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "table" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
                 <List className="h-3.5 w-3.5" /> Table
               </button>
             </div>
@@ -591,7 +699,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-gray-700">Recent Leads <span className="text-gray-400 font-normal">(last 30 days)</span></h2>
-                <button onClick={() => { setFilterSource(""); setFilterStage(""); setView("table") }} className="text-xs text-[#0C0F4C] hover:underline">
+                <button onClick={() => { setFilterSource(""); setFilterStage(""); setView("table"); updateURL({ form: "", stage: "", view: "table" }) }} className="text-xs text-[#0C0F4C] hover:underline">
                   View all →
                 </button>
               </div>
@@ -641,7 +749,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                   </table>
                   {recentLeads.length > 20 && (
                     <div className="px-4 py-3 border-t bg-gray-50 text-center">
-                      <button onClick={() => { setFilterSource(""); setFilterStage(""); setView("table") }} className="text-xs text-[#0C0F4C] hover:underline">
+                      <button onClick={() => { setFilterSource(""); setFilterStage(""); setView("table"); updateURL({ form: "", stage: "", view: "table" }) }} className="text-xs text-[#0C0F4C] hover:underline">
                         +{recentLeads.length - 20} more — view all
                       </button>
                     </div>
@@ -659,17 +767,17 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
             <div className="flex flex-wrap gap-3">
               <div className="relative flex-1 min-w-48">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1) }} placeholder="Search leads..." className="pl-9" />
+                <Input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); updateURL({ q: e.target.value }) }} placeholder="Search leads..." className="pl-9" />
               </div>
-              {/* Form filter — combined form type + source */}
               {formBreakdown.length > 1 && (
                 <select
                   value={`${filterFormType}|||${filterSource}`}
                   onChange={(e) => {
                     const [ft, src] = e.target.value.split("|||")
-                    setFilterFormType(ft === "" ? "" : ft)
-                    setFilterSource(src === "" ? "" : src)
-                    setPage(1)
+                    const newFt = ft === "" ? "" : ft
+                    const newSrc = src === "" ? "" : src
+                    setFilterFormType(newFt); setFilterSource(newSrc); setPage(1)
+                    updateURL({ form: newFt || newSrc ? `${newFt}|||${newSrc}` : "" })
                   }}
                   className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]"
                 >
@@ -681,21 +789,55 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                   ))}
                 </select>
               )}
-              <select value={filterStage} onChange={(e) => { setFilterStage(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+              <select value={filterStage} onChange={(e) => { setFilterStage(e.target.value); setPage(1); updateURL({ stage: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
                 <option value="">All stages</option>
                 {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
               </select>
-              <select value={filterOwner} onChange={(e) => { setFilterOwner(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+              <select value={filterOwner} onChange={(e) => { setFilterOwner(e.target.value); setPage(1); updateURL({ owner: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
                 <option value="">All owners</option>
                 {profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
               </select>
-              {/* City filter — only show when a form with cities is selected, or always if multiple cities exist */}
               {cityBreakdown.length > 1 && (
-                <select value={filterCity} onChange={(e) => { setFilterCity(e.target.value); setPage(1) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                <select value={filterCity} onChange={(e) => { setFilterCity(e.target.value); setPage(1); updateURL({ city: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
                   <option value="">All cities</option>
                   {cityBreakdown.map(([city]) => <option key={city} value={city}>{city}</option>)}
                 </select>
               )}
+              {availableBirthYears.length > 0 && (
+                <select value={filterBirthYear} onChange={(e) => { setFilterBirthYear(e.target.value); setPage(1); updateURL({ year: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                  <option value="">All years</option>
+                  {availableBirthYears.map((y) => <option key={y} value={String(y)}>{y}</option>)}
+                </select>
+              )}
+              {availableSquads.length > 0 && (
+                <select value={filterSquad} onChange={(e) => { setFilterSquad(e.target.value); setPage(1); updateURL({ squad: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                  <option value="">All squads</option>
+                  {availableSquads.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              )}
+              {availableStates.length > 1 && (
+                <select value={filterState} onChange={(e) => { setFilterState(e.target.value); setPage(1); updateURL({ st: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                  <option value="">All states</option>
+                  {availableStates.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              )}
+              {availableLevels.length > 0 && (
+                <select value={filterLevel} onChange={(e) => { setFilterLevel(e.target.value); setPage(1); updateURL({ level: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                  <option value="">All levels</option>
+                  {availableLevels.map((l) => <option key={l} value={l}>{l}</option>)}
+                </select>
+              )}
+              {availableCampaigns.length > 0 && (
+                <select value={filterCampaign} onChange={(e) => { setFilterCampaign(e.target.value); setPage(1); updateURL({ campaign: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                  <option value="">All campaigns</option>
+                  {availableCampaigns.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              )}
+              <select value={filterHasPlayer} onChange={(e) => { setFilterHasPlayer(e.target.value); setPage(1); updateURL({ player: e.target.value }) }} className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+                <option value="">Any player</option>
+                <option value="yes">Has player</option>
+                <option value="no">No player</option>
+              </select>
               <span className="self-center text-sm text-gray-400">{filtered.length.toLocaleString()} leads</span>
             </div>
 

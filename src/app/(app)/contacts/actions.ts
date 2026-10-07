@@ -244,3 +244,19 @@ export async function removeTagFromContact(
   updateTag("contacts")
   return { error: error?.message ?? null }
 }
+
+export async function searchContacts(
+  query: string
+): Promise<Pick<Tables<"contacts">, "id" | "first_name" | "last_name" | "email" | "phone">[]> {
+  await requireAdmin()
+  const supabase = await createClient()
+  const q = query.trim()
+  if (!q) return []
+  const { data } = await supabase
+    .from("contacts")
+    .select("id, first_name, last_name, email, phone")
+    .is("archived_at", null)
+    .or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%,email.ilike.%${q}%`)
+    .limit(8)
+  return (data ?? []) as Pick<Tables<"contacts">, "id" | "first_name" | "last_name" | "email" | "phone">[]
+}

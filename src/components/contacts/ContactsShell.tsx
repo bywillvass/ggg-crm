@@ -23,6 +23,7 @@ import {
   addTagToContact,
   type ContactWithPlayers,
 } from "@/app/(app)/contacts/actions"
+import { createPlayerWithParent } from "@/app/(app)/players/actions"
 import { CampaignComposer } from "@/components/email/CampaignComposer"
 import type { Tables, Database, TablesInsert } from "@/lib/database.types"
 import type { EmailTemplateRow } from "@/app/(app)/email/actions"
@@ -56,6 +57,9 @@ export function ContactsShell({
   const [bulkTag, setBulkTag] = useState("")
   const [saving, setSaving] = useState(false)
   const [bulkEmailOpen, setBulkEmailOpen] = useState(false)
+  const [addPlayerContactId, setAddPlayerContactId] = useState<string | null>(null)
+  const [addPlayerForm, setAddPlayerForm] = useState({ first_name: "", last_name: "", birth_year: "" })
+  const [savingPlayer, setSavingPlayer] = useState(false)
 
   const [newForm, setNewForm] = useState<Partial<TablesInsert<"contacts">>>({
     marketing_consent: "none",
@@ -134,16 +138,38 @@ export function ContactsShell({
   async function handleCreateContact(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    const result = await createContact(newForm as TablesInsert<"contacts">)
+    const result = await createContact({ ...newForm, contact_type: "parent" } as TablesInsert<"contacts">)
     setSaving(false)
 
     if (result.error) {
       toast.error(result.error)
     } else {
-      toast.success("Contact created")
       setNewDialogOpen(false)
       setNewForm({ marketing_consent: "none", tags: [] })
-      router.refresh()
+      setAddPlayerContactId(result.data!.id)
+    }
+  }
+
+  async function handleAddPlayer() {
+    if (!addPlayerContactId || !addPlayerForm.first_name) return
+    setSavingPlayer(true)
+    const result = await createPlayerWithParent(
+      {
+        first_name: addPlayerForm.first_name,
+        last_name: addPlayerForm.last_name || null,
+        birth_year: addPlayerForm.birth_year ? parseInt(addPlayerForm.birth_year) : null,
+        status: "prospect",
+      },
+      { mode: "existing", contact_id: addPlayerContactId }
+    )
+    setSavingPlayer(false)
+    if (result.error) {
+      toast.error(result.error)
+    } else {
+      toast.success("Player added")
+      setAddPlayerContactId(null)
+      setAddPlayerForm({ first_name: "", last_name: "", birth_year: "" })
+      router.push(`/players/${result.data?.id}`)
     }
   }
 
@@ -463,6 +489,51 @@ export function ContactsShell({
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!addPlayerContactId} onOpenChange={(o) => { if (!o) { setAddPlayerContactId(null); setAddPlayerForm({ first_name: "", last_name: "", birth_year: "" }); router.refresh() } }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add a player?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-gray-500">Contact created. Would you like to add a player for this parent?</p>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Player first name <span className="text-red-500">*</span></Label>
+                <Input value={addPlayerForm.first_name} onChange={(e) => setAddPlayerForm((f) => ({ ...f, first_name: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Last name</Label>
+                <Input value={addPlayerForm.last_name} onChange={(e) => setAddPlayerForm((f) => ({ ...f, last_name: e.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Birth year</Label>
+              <Input
+                type="number"
+                value={addPlayerForm.birth_year}
+                onChange={(e) => setAddPlayerForm((f) => ({ ...f, birth_year: e.target.value }))}
+                placeholder="e.g. 2012"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setAddPlayerContactId(null); setAddPlayerForm({ first_name: "", last_name: "", birth_year: "" }); router.refresh() }}
+            >
+              Skip
+            </Button>
+            <Button
+              onClick={handleAddPlayer}
+              disabled={savingPlayer || !addPlayerForm.first_name}
+              className="bg-[#C9A227] hover:bg-[#b8911f] text-white"
+            >
+              {savingPlayer ? "Adding..." : "Add player"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

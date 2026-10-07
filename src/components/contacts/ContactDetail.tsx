@@ -58,6 +58,7 @@ export function ContactDetail({ contact: initial }: Props) {
     notes: contact.notes ?? "",
     marketing_consent: contact.marketing_consent,
     source: contact.source ?? "",
+    contact_type: contact.contact_type ?? "parent",
   })
   const [saving, setSaving] = useState(false)
   const [newTag, setNewTag] = useState("")
@@ -80,6 +81,7 @@ export function ContactDetail({ contact: initial }: Props) {
       notes: editForm.notes || null,
       marketing_consent: editForm.marketing_consent,
       source: (editForm.source as Tables<"contacts">["source"]) || null,
+      contact_type: editForm.contact_type || null,
     })
     setSaving(false)
 
@@ -167,9 +169,14 @@ export function ContactDetail({ contact: initial }: Props) {
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-start gap-4">
         <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-[#0C0F4C]">
-            {contact.first_name} {contact.last_name}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-[#0C0F4C]">
+              {contact.first_name} {contact.last_name}
+            </h1>
+            {contact.contact_type && (
+              <Badge variant="secondary" className="text-xs capitalize">{contact.contact_type}</Badge>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-3 mt-1">
             {contact.email && (
               <a href={`mailto:${contact.email}`} className="flex items-center gap-1 text-sm text-blue-600 hover:underline">
@@ -184,6 +191,30 @@ export function ContactDetail({ contact: initial }: Props) {
               </a>
             )}
           </div>
+          {(contact.player_contacts ?? []).length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              {contact.player_contacts.map((pc) => {
+                const p = pc.players
+                if (!p) return null
+                return (
+                  <Link
+                    key={pc.player_id}
+                    href={`/players/${pc.player_id}`}
+                    className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-[#0C0F4C] hover:bg-gray-100"
+                  >
+                    {p.first_name} {p.last_name}
+                    {p.birth_year && <span className="text-gray-400">· {p.birth_year}</span>}
+                    <Badge
+                      variant={p.status === "active" ? "success" : "secondary"}
+                      className="text-xs ml-0.5 py-0"
+                    >
+                      {p.status}
+                    </Badge>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
           <div className="flex flex-wrap gap-1.5 mt-2">
             {(contact.tags ?? []).map((tag) => (
               <Badge key={tag} variant="secondary" className="gap-1">
@@ -287,7 +318,19 @@ export function ContactDetail({ contact: initial }: Props) {
                   <Input value={editForm.state} onChange={(e) => setEditForm((f) => ({ ...f, state: e.target.value }))} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Type</Label>
+                  <select
+                    value={editForm.contact_type}
+                    onChange={(e) => setEditForm((f) => ({ ...f, contact_type: e.target.value }))}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]"
+                  >
+                    <option value="parent">Parent</option>
+                    <option value="player">Player</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
                 <div className="space-y-1.5">
                   <Label>Consent</Label>
                   <select

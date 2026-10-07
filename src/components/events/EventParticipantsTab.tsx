@@ -453,7 +453,19 @@ export function EventParticipantsTab({
                         </button>
                       </td>
                     )}
-                    <td className="px-4 py-3 font-medium text-gray-900">{participantName(p)}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-900">{participantName(p)}</div>
+                      {p.players && contact && (
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs text-gray-400">{contact.first_name} {contact.last_name}</span>
+                          {contact.phone && (
+                            <a href={`tel:${contact.phone}`} className="text-xs text-blue-500 hover:underline">
+                              {contact.phone}
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{p.players?.birth_year ?? "-"}</td>
                     <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{p.players?.position ?? "-"}</td>
                     <td className="px-4 py-3 hidden lg:table-cell">

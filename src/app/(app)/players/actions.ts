@@ -183,3 +183,53 @@ export async function unlinkPlayerContact(id: string): Promise<{ error: string |
   updateTag("players")
   return { error: error?.message ?? null }
 }
+
+export async function createPlayerWithParent(
+  playerData: TablesInsert<"players">,
+  parent:
+    | { mode: "existing"; contact_id: string }
+    | { mode: "new"; first_name: string; last_name?: string | null; phone?: string | null; email?: string | null }
+): Promise<{ data: Tables<"players"> | null; error: string | null }> {
+  await requireAdmin()
+  const supabase = await createClient()
+
+  let contactId: string
+
+  if (parent.mode === "new") {
+    const { data: contact, error: contactErr } = await supabase
+      .from("contacts")
+      .insert({
+        first_name: parent.first_name || null,
+        last_name: parent.last_name || null,
+        phone: parent.phone ?? null,
+        email: parent.email ?? null,
+        contact_type: "parent",
+        marketing_consent: "none",
+      })
+      .select("id")
+      .single()
+    if (contactErr) return { data: null, error: contactErr.message }
+    contactId = contact.id
+  } else {
+    contactId = parent.contact_id
+  }
+
+  const { data: player, error: playerErr } = await supabase
+    .from("players")
+    .insert(playerData)
+    .select()
+    .single()
+  if (playerErr) return { data: null, error: playerErr.message }
+
+  await supabase.from("player_contacts").insert({
+    player_id: player.id,
+    contact_id: contactId,
+    relationship: "guardian",
+    is_primary: true,
+    is_emergency: false,
+  })
+
+  updateTag("players")
+  updateTag("contacts")
+  return { data: player, error: null }
+}

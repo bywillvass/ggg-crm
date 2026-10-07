@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Phone, Archive, Edit2, Check, UserPlus, Eye, Trash2, FileText, Download } from "lucide-react"
+import { Phone, Mail, Archive, Edit2, Check, UserPlus, Eye, Trash2, FileText, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -334,6 +334,44 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
           </Button>
         </div>
       </div>
+
+      {player.player_contacts.length > 0 && (
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          {player.player_contacts.map((pc) => {
+            const c = pc.contacts
+            if (!c) return null
+            const waNumber = c.phone?.replace(/\D/g, "")
+            return (
+              <div key={pc.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium text-gray-700">{c.first_name} {c.last_name}</span>
+                <span className="text-xs text-gray-400">{pc.relationship}</span>
+                {c.phone && (
+                  <a href={`tel:${c.phone}`} className="flex items-center gap-1 text-blue-600 hover:underline">
+                    <Phone className="h-3.5 w-3.5" />
+                    {c.phone}
+                  </a>
+                )}
+                {c.phone && waNumber && (
+                  <a
+                    href={`https://wa.me/${waNumber}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-green-600 hover:underline"
+                  >
+                    WhatsApp
+                  </a>
+                )}
+                {c.email && (
+                  <a href={`mailto:${c.email}`} className="flex items-center gap-1 text-blue-600 hover:underline">
+                    <Mail className="h-3.5 w-3.5" />
+                    {c.email}
+                  </a>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       <div className="flex gap-1 border-b overflow-x-auto">
         {TABS.map((tab) => (

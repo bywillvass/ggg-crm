@@ -16,8 +16,11 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog"
-import { createPlayer } from "@/app/(app)/players/actions"
+import { createPlayerWithParent } from "@/app/(app)/players/actions"
+import { searchContacts } from "@/app/(app)/contacts/actions"
 import type { Tables, TablesInsert } from "@/lib/database.types"
+
+type ContactResult = Pick<Tables<"contacts">, "id" | "first_name" | "last_name" | "email" | "phone">
 
 const PAGE_SIZE = 25
 
@@ -40,6 +43,12 @@ export function PlayersShell({ players: initialPlayers }: { players: PlayerRow[]
   const [newDialogOpen, setNewDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [newForm, setNewForm] = useState<Partial<TablesInsert<"players">>>({ status: "prospect" })
+  const [parentMode, setParentMode] = useState<"new" | "existing">("new")
+  const [parentForm, setParentForm] = useState({ first_name: "", last_name: "", phone: "", email: "" })
+  const [parentSearch, setParentSearch] = useState("")
+  const [parentResults, setParentResults] = useState<ContactResult[]>([])
+  const [parentSearching, setParentSearching] = useState(false)
+  const [selectedParent, setSelectedParent] = useState<ContactResult | null>(null)
 
   const filtered = useMemo(() => {
     let result = initialPlayers
@@ -77,10 +86,38 @@ export function PlayersShell({ players: initialPlayers }: { players: PlayerRow[]
   const states = [...new Set(initialPlayers.map((p) => p.state).filter(Boolean))].sort() as string[]
   const years = [...new Set(initialPlayers.map((p) => p.birth_year).filter(Boolean))].sort((a, b) => (b as number) - (a as number)) as number[]
 
+  async function handleParentSearch() {
+    if (!parentSearch.trim()) return
+    setParentSearching(true)
+    const results = await searchContacts(parentSearch)
+    setParentResults(results)
+    setParentSearching(false)
+  }
+
+  function resetDialog() {
+    setNewForm({ status: "prospect" })
+    setParentMode("new")
+    setParentForm({ first_name: "", last_name: "", phone: "", email: "" })
+    setParentSearch("")
+    setParentResults([])
+    setSelectedParent(null)
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
+    if (parentMode === "new" && !parentForm.first_name) {
+      return toast.error("Parent first name is required")
+    }
+    if (parentMode === "existing" && !selectedParent) {
+      return toast.error("Please select a parent contact")
+    }
     setSaving(true)
-    const result = await createPlayer(newForm as TablesInsert<"players">)
+    const result = await createPlayerWithParent(
+      newForm as TablesInsert<"players">,
+      parentMode === "existing"
+        ? { mode: "existing", contact_id: selectedParent!.id }
+        : { mode: "new", first_name: parentForm.first_name, last_name: parentForm.last_name || null, phone: parentForm.phone || null, email: parentForm.email || null }
+    )
     setSaving(false)
 
     if (result.error) {
@@ -88,7 +125,7 @@ export function PlayersShell({ players: initialPlayers }: { players: PlayerRow[]
     } else {
       toast.success("Player created")
       setNewDialogOpen(false)
-      setNewForm({ status: "prospect" })
+      resetDialog()
       router.push(`/players/${result.data?.id}`)
     }
   }
@@ -223,8 +260,8 @@ export function PlayersShell({ players: initialPlayers }: { players: PlayerRow[]
         </div>
       )}
 
-      <Dialog open={newDialogOpen} onOpenChange={(o) => { if (!o) setNewDialogOpen(false) }}>
-        <DialogContent className="sm:max-w-lg">
+      <Dialog open={newDialogOpen} onOpenChange={(o) => { if (!o) { setNewDialogOpen(false); resetDialog() } }}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>New player</DialogTitle>
           </DialogHeader>
@@ -276,8 +313,100 @@ export function PlayersShell({ players: initialPlayers }: { players: PlayerRow[]
                 <option value="alumni">Alumni</option>
               </select>
             </div>
+
+            <div className="pt-1 border-t">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-medium text-gray-700">Parent / guardian <span className="text-red-500">*</span></p>
+                <div className="flex rounded-md border overflow-hidden text-xs">
+                  <button
+                    type="button"
+                    onClick={() => { setParentMode("new"); setSelectedParent(null) }}
+                    className={`px-3 py-1 ${parentMode === "new" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+                  >
+                    New
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setParentMode("existing")}
+                    className={`px-3 py-1 ${parentMode === "existing" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+                  >
+                    Existing
+                  </button>
+                </div>
+              </div>
+
+              {parentMode === "new" && (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>First name <span className="text-red-500">*</span></Label>
+                      <Input value={parentForm.first_name} onChange={(e) => setParentForm((f) => ({ ...f, first_name: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Last name</Label>
+                      <Input value={parentForm.last_name} onChange={(e) => setParentForm((f) => ({ ...f, last_name: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>Phone</Label>
+                      <Input value={parentForm.phone} onChange={(e) => setParentForm((f) => ({ ...f, phone: e.target.value }))} placeholder="+61 4xx xxx xxx" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Email</Label>
+                      <Input type="email" value={parentForm.email} onChange={(e) => setParentForm((f) => ({ ...f, email: e.target.value }))} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {parentMode === "existing" && (
+                <div className="space-y-2">
+                  {selectedParent ? (
+                    <div className="flex items-center justify-between rounded-lg border bg-gray-50 px-3 py-2">
+                      <div>
+                        <p className="text-sm font-medium">{selectedParent.first_name} {selectedParent.last_name}</p>
+                        <p className="text-xs text-gray-500">{selectedParent.email ?? selectedParent.phone ?? ""}</p>
+                      </div>
+                      <button type="button" onClick={() => setSelectedParent(null)} className="text-xs text-gray-400 hover:text-red-500">Change</button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Search by name or email..."
+                          value={parentSearch}
+                          onChange={(e) => setParentSearch(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleParentSearch())}
+                          className="flex-1"
+                        />
+                        <Button type="button" variant="outline" size="sm" onClick={handleParentSearch} disabled={parentSearching}>
+                          {parentSearching ? "..." : "Search"}
+                        </Button>
+                      </div>
+                      {parentResults.length > 0 && (
+                        <div className="border rounded-lg divide-y max-h-40 overflow-y-auto">
+                          {parentResults.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => { setSelectedParent(c); setParentResults([]) }}
+                              className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                            >
+                              <p className="text-sm font-medium">{c.first_name} {c.last_name}</p>
+                              <p className="text-xs text-gray-500">{c.email ?? c.phone ?? ""}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setNewDialogOpen(false)}>Cancel</Button>
+              <Button type="button" variant="outline" onClick={() => { setNewDialogOpen(false); resetDialog() }}>Cancel</Button>
               <Button type="submit" disabled={saving} className="bg-[#C9A227] hover:bg-[#b8911f] text-white">
                 {saving ? "Creating..." : "Create player"}
               </Button>

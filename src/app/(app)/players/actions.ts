@@ -155,6 +155,17 @@ export async function archivePlayer(id: string): Promise<{ error: string | null 
   return { error: error?.message ?? null }
 }
 
+export async function bulkArchivePlayers(ids: string[]): Promise<{ error: string | null }> {
+  await requireAdmin()
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from("players")
+    .update({ archived_at: new Date().toISOString() })
+    .in("id", ids)
+  updateTag("players")
+  return { error: error?.message ?? null }
+}
+
 export async function linkPlayerContact(
   player_id: string,
   contact_id: string,

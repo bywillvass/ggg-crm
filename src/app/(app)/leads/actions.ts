@@ -514,3 +514,25 @@ export async function bulkAddLeadsToEvent(
   }
   return { added, skipped, error: null }
 }
+
+export async function addTagToLead(id: string, tag: string): Promise<{ error: string | null }> {
+  await requireAdmin()
+  const supabase = await createClient()
+  const { data: lead } = await supabase.from("leads").select("contact_id").eq("id", id).single()
+  if (!lead?.contact_id) return { error: null }
+  const { data: contact } = await supabase.from("contacts").select("tags").eq("id", lead.contact_id).single()
+  const existing: string[] = (contact?.tags as string[]) ?? []
+  if (existing.includes(tag)) return { error: null }
+  const { error } = await supabase.from("contacts").update({ tags: [...existing, tag] }).eq("id", lead.contact_id)
+  updateTag("leads")
+  return { error: error?.message ?? null }
+}
+
+export async function bulkAddTagToLeads(ids: string[], tag: string): Promise<{ error: string | null }> {
+  await requireAdmin()
+  for (const id of ids) {
+    const r = await addTagToLead(id, tag)
+    if (r.error) return r
+  }
+  return { error: null }
+}

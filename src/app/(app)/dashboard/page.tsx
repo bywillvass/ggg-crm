@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { redirect } from "next/navigation"
 import { getCurrentRole } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
@@ -60,6 +61,14 @@ type TaskRow = {
   players: { first_name: string; last_name: string } | null
 }
 
+type RecentLeadRow = {
+  id: string
+  stage: string
+  source: string
+  created_at: string
+  contacts: { first_name: string; last_name: string } | null
+}
+
 type EventRow = {
   id: string
   title: string
@@ -87,6 +96,8 @@ export default async function DashboardPage() {
     leadsThisWeekRes,
     leadsLastWeekRes,
     leadsByStageRes,
+    followUpsDueRes,
+    recentLeadsRes,
     upcomingEventsRes,
     invoiceOutstandingRes,
     invoiceOverdueRes,
@@ -97,6 +108,19 @@ export default async function DashboardPage() {
     supabase.from("leads").select("source").gte("created_at", sevenDaysAgo),
     supabase.from("leads").select("source").gte("created_at", fourteenDaysAgo).lt("created_at", sevenDaysAgo),
     supabase.from("leads").select("stage, id").is("archived_at", null),
+    supabase
+      .from("leads")
+      .select("id")
+      .is("archived_at", null)
+      .lte("next_follow_up_at", now.toISOString())
+      .neq("stage", "lost")
+      .neq("stage", "not_interested"),
+    supabase
+      .from("leads")
+      .select("id, stage, source, created_at, contacts(first_name, last_name)")
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .limit(10),
     supabase
       .from("events")
       .select("id, title, start_at, type, status, capacity")
@@ -135,6 +159,12 @@ export default async function DashboardPage() {
   const leadsThisWeek = leadsThisWeekRes.data?.length ?? 0
   const leadsLastWeek = leadsLastWeekRes.data?.length ?? 0
   const leadsDelta = leadsThisWeek - leadsLastWeek
+
+  // Total active leads (non-lost, non-not_interested)
+  const activeStages = new Set(["new", "contacted", "interested", "confirmed", "signed"])
+  const totalActive = (leadsByStageRes.data ?? []).filter((l) => activeStages.has(l.stage)).length
+  const followUpsDue = followUpsDueRes.data?.length ?? 0
+  const recentLeads = (recentLeadsRes.data ?? []) as RecentLeadRow[]
 
   // Leads by stage
   const stageCountMap: Record<string, number> = {}
@@ -193,6 +223,21 @@ export default async function DashboardPage() {
 
   const recentActivity = (recentActivityRes.data ?? []) as ActivityRow[]
 
+  // Stage pill colours for recent leads table
+  const stagePill: Record<string, string> = {
+    new: "bg-blue-100 text-blue-800",
+    contacted: "bg-indigo-100 text-indigo-800",
+    interested: "bg-yellow-100 text-yellow-800",
+    confirmed: "bg-green-100 text-green-800",
+    signed: "bg-emerald-100 text-emerald-800",
+    not_interested: "bg-gray-100 text-gray-600",
+    lost: "bg-red-100 text-red-700",
+  }
+  const stageLabel: Record<string, string> = {
+    new: "New", contacted: "Contacted", interested: "Interested",
+    confirmed: "Confirmed", signed: "Signed", not_interested: "Not Interested", lost: "Lost",
+  }
+
   // Type pill colours
   const eventTypePill: Record<string, string> = {
     trial: "bg-blue-100 text-blue-800",
@@ -214,17 +259,29 @@ export default async function DashboardPage() {
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <h1 className="text-2xl font-bold text-[#0C0F4C]">Dashboard</h1>
 
-      {/* Top stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* New leads this week */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
+      {/* Leads overview */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Link href="/leads" className="bg-white rounded-xl border border-gray-200 p-5 hover:border-[#0C0F4C]/30 transition-colors">
+          <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">Total Active Leads</p>
+          <p className="text-3xl font-bold text-[#0C0F4C] mt-1">{totalActive}</p>
+          <p className="text-sm text-gray-400 mt-1">in pipeline</p>
+        </Link>
+        <Link href="/leads" className="bg-white rounded-xl border border-gray-200 p-5 hover:border-[#0C0F4C]/30 transition-colors">
           <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">New Leads (7d)</p>
           <p className="text-3xl font-bold text-[#0C0F4C] mt-1">{leadsThisWeek}</p>
           <p className={cn("text-sm mt-1", leadsDelta >= 0 ? "text-green-600" : "text-red-500")}>
             {leadsDelta >= 0 ? "+" : ""}{leadsDelta} vs prev week
           </p>
-        </div>
+        </Link>
+        <Link href="/leads" className={cn("bg-white rounded-xl border p-5 hover:border-[#0C0F4C]/30 transition-colors", followUpsDue > 0 ? "border-orange-300 bg-orange-50" : "border-gray-200")}>
+          <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">Follow-ups Due</p>
+          <p className={cn("text-3xl font-bold mt-1", followUpsDue > 0 ? "text-orange-600" : "text-[#0C0F4C]")}>{followUpsDue}</p>
+          <p className="text-sm text-gray-400 mt-1">scheduled &amp; overdue</p>
+        </Link>
+      </div>
 
+      {/* Top stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Outstanding invoices */}
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">Outstanding</p>
@@ -322,7 +379,51 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Third row: leads by stage + tasks */}
+      {/* Third row: recent leads */}
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-[#0C0F4C]">Recent Leads</h2>
+          <Link href="/leads" className="text-xs text-[#C9A227] font-medium hover:underline">View all</Link>
+        </div>
+        {recentLeads.length === 0 ? (
+          <p className="text-sm text-gray-400">No leads yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left text-xs text-gray-400 font-medium pb-2">Name</th>
+                  <th className="text-left text-xs text-gray-400 font-medium pb-2">Stage</th>
+                  <th className="text-left text-xs text-gray-400 font-medium pb-2 hidden sm:table-cell">Source</th>
+                  <th className="text-left text-xs text-gray-400 font-medium pb-2 hidden sm:table-cell">Added</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentLeads.map((lead) => (
+                  <tr key={lead.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                    <td className="py-2 pr-4">
+                      <Link href={`/leads/${lead.id}`} className="font-medium text-gray-800 hover:text-[#0C0F4C]">
+                        {lead.contacts ? `${lead.contacts.first_name} ${lead.contacts.last_name}` : "—"}
+                      </Link>
+                    </td>
+                    <td className="py-2 pr-4">
+                      <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", stagePill[lead.stage] ?? "bg-gray-100 text-gray-600")}>
+                        {stageLabel[lead.stage] ?? lead.stage}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-4 hidden sm:table-cell text-gray-500 capitalize">{lead.source.replace(/_/g, " ")}</td>
+                    <td className="py-2 hidden sm:table-cell text-gray-400">
+                      {new Date(lead.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Fourth row: leads by stage + tasks */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Leads by stage */}
         <div className="bg-white rounded-xl border border-gray-200 p-5">

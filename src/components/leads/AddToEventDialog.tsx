@@ -9,7 +9,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog"
 import { listEvents } from "@/app/(app)/events/actions"
-import { addLeadToEvent } from "@/app/(app)/leads/actions"
+import { addLeadToEvent, bulkAddLeadsToEvent } from "@/app/(app)/leads/actions"
 import type { EventSummary } from "@/app/(app)/events/actions"
 import type { Database } from "@/lib/database.types"
 
@@ -21,12 +21,14 @@ export function AddToEventDialog({
   open,
   onClose,
   onSuccess,
+  bulkLeadIds,
 }: {
   leadId: string
   leadName: string
   open: boolean
   onClose: () => void
   onSuccess: (eventTitle: string) => void
+  bulkLeadIds?: string[]
 }) {
   const [events, setEvents] = useState<EventSummary[]>([])
   const [loadingEvents, setLoadingEvents] = useState(false)
@@ -51,16 +53,21 @@ export function AddToEventDialog({
   async function handleAdd() {
     if (!selectedEventId) return
     setAdding(true)
-    const result = await addLeadToEvent(leadId, selectedEventId, status as "invited" | "confirmed" | "waitlisted")
-    setAdding(false)
-    if (result.error) {
-      toast.error(result.error)
-    } else if (result.alreadyInEvent) {
-      toast.info(`Already added to ${result.eventTitle}`)
-      onClose()
+    const eventTitle = events.find((e) => e.id === selectedEventId)?.title ?? "event"
+    if (bulkLeadIds && bulkLeadIds.length > 0) {
+      const result = await bulkAddLeadsToEvent(bulkLeadIds, selectedEventId, status as "invited" | "confirmed" | "waitlisted")
+      setAdding(false)
+      if (result.error) toast.error(result.error)
+      else {
+        toast.success(`Added ${result.added} to ${eventTitle}${result.skipped > 0 ? `, ${result.skipped} already in event` : ""}`)
+        onSuccess(eventTitle)
+      }
     } else {
-      toast.success(`Added to ${result.eventTitle}`)
-      onSuccess(result.eventTitle ?? "event")
+      const result = await addLeadToEvent(leadId, selectedEventId, status as "invited" | "confirmed" | "waitlisted")
+      setAdding(false)
+      if (result.error) toast.error(result.error)
+      else if (result.alreadyInEvent) { toast.info(`Already added to ${result.eventTitle}`); onClose() }
+      else { toast.success(`Added to ${result.eventTitle}`); onSuccess(result.eventTitle ?? "event") }
     }
   }
 

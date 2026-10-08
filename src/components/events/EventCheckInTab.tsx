@@ -10,7 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog"
 import { cn } from "cn"
-import { checkInParticipant, addWalkIn, type EventDetail, type ParticipantRow } from "@/app/(app)/events/actions"
+import { checkInParticipant, updateParticipantStatus, addWalkIn, type EventDetail, type ParticipantRow } from "@/app/(app)/events/actions"
 
 function participantName(p: ParticipantRow): string {
   if (p.players) return `${p.players.first_name ?? ""} ${p.players.last_name ?? ""}`.trim()
@@ -41,14 +41,18 @@ export function EventCheckInTab({
 
   const participants = event.participants
 
-  // Sort: confirmed/invited first, then attended, then rest
+  // Sort: confirmed/invited first, then attended, then rest; alphabetical by first name within each group
   const sorted = useMemo(() => {
     return [...participants].sort((a, b) => {
       const order: Record<string, number> = {
         confirmed: 0, invited: 1, to_be_invited: 2, waitlisted: 3,
         attended: 4, no_show: 5, declined: 6, cancelled: 7,
       }
-      return (order[a.status] ?? 9) - (order[b.status] ?? 9)
+      const statusDiff = (order[a.status] ?? 9) - (order[b.status] ?? 9)
+      if (statusDiff !== 0) return statusDiff
+      const aFirst = (a.players?.first_name ?? a.contacts?.first_name ?? "").toLowerCase()
+      const bFirst = (b.players?.first_name ?? b.contacts?.first_name ?? "").toLowerCase()
+      return aFirst.localeCompare(bFirst)
     })
   }, [participants])
 
@@ -97,24 +101,16 @@ async function handleCheckIn(id: string, status: "attended" | "no_show") {
       ),
     })
 
-    const { error } = await checkInParticipant(id, "attended")
+    const { error } = await updateParticipantStatus(id, "confirmed", event.id)
     if (error) {
-      // Actually we want to undo - set back to confirmed
-      // Since the RPC only allows attended/no_show, undo is handled client-side only
-      // We'll silently keep the optimistic update
+      toast.error(error)
+      onUpdate({
+        ...event,
+        participants: event.participants.map((p) =>
+          p.id === id ? { ...p, status: prev! } : p
+        ),
+      })
     }
-    // The RPC doesn't support reverting - but for UX we can at least mark back
-    // In practice: if undo is clicked after "attended", we want "confirmed" status
-    // The RPC enforces attended/no_show only, so undo just leaves it as attended client-side
-    // For a full undo, admin must use the participants tab to change status manually
-    // Here we just show the toast
-    toast.info("Use the Participants tab to fully undo a check-in")
-    onUpdate({
-      ...event,
-      participants: event.participants.map((p) =>
-        p.id === id ? { ...p, status: prev!, checked_in_at: null } : p
-      ),
-    })
     setPendingId(null)
   }
 
@@ -244,25 +240,25 @@ async function handleCheckIn(id: string, status: "attended" | "no_show") {
                     onClick={() => handleCheckIn(p.id, "attended")}
                     disabled={isPending}
                     className={cn(
-                      "w-14 h-12 rounded-xl font-semibold text-sm transition-all",
+                      "px-3 h-12 rounded-xl font-semibold text-sm transition-all",
                       isPending
                         ? "bg-gray-100 text-gray-400"
                         : "bg-green-500 hover:bg-green-600 text-white active:scale-95"
                     )}
                   >
-                    {isPending ? "..." : "In"}
+                    {isPending ? "..." : "Here"}
                   </button>
                   <button
                     onClick={() => handleCheckIn(p.id, "no_show")}
                     disabled={isPending}
                     className={cn(
-                      "w-14 h-12 rounded-xl font-semibold text-sm transition-all",
+                      "px-3 h-12 rounded-xl font-semibold text-sm transition-all",
                       isPending
                         ? "bg-gray-100 text-gray-400"
                         : "bg-red-100 hover:bg-red-200 text-red-700 active:scale-95"
                     )}
                   >
-                    {isPending ? "..." : "Out"}
+                    {isPending ? "..." : "Not here"}
                   </button>
                 </div>
               )}

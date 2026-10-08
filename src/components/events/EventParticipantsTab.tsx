@@ -6,6 +6,7 @@ import Papa from "papaparse"
 import { format } from "date-fns"
 import {
   Search, Plus, Download, UserPlus, Trash2, CheckSquare, Square, Mail,
+  User, Users, MessageCircle, ExternalLink,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -31,6 +32,8 @@ import {
 } from "@/app/(app)/events/actions"
 import { bulkAddLeadsToEvent } from "@/app/(app)/leads/actions"
 import { CampaignComposer } from "@/components/email/CampaignComposer"
+import { RowMenu } from "@/components/shared/RowMenu"
+import { useRouter } from "next/navigation"
 import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 import type { Database, Tables } from "@/lib/database.types"
 
@@ -75,6 +78,7 @@ export function EventParticipantsTab({
   emailTemplates?: EmailTemplateRow[]
   emailEvents?: Pick<Tables<"events">, "id" | "title" | "start_at" | "timezone">[]
 }) {
+  const router = useRouter()
   const [showEmailComposer, setShowEmailComposer] = useState(false)
   const [search, setSearch] = useState("")
   const [filterStatus, setFilterStatus] = useState<ParticipantStatus | "">("")
@@ -335,6 +339,14 @@ export function EventParticipantsTab({
     setSavingWalkIn(false)
   }
 
+  function waLink(phone: string | null | undefined): string | null {
+    if (!phone) return null
+    const digits = phone.replace(/\D/g, "")
+    if (digits.length < 8) return null
+    const e164 = digits.startsWith("0") ? `61${digits.slice(1)}` : digits
+    return `https://wa.me/${e164}`
+  }
+
   function exportCSV() {
     const rows = filtered.map((p) => {
       const contact = primaryContact(p)
@@ -516,13 +528,13 @@ export function EventParticipantsTab({
                       )}
                     </td>
                     {role === "admin" && (
-                      <td className="px-4 py-3">
-                        <button
-                          onClick={() => setRemoveId(p.id)}
-                          className="text-gray-300 hover:text-red-500 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                      <td className="px-2 py-3">
+                        <RowMenu items={[
+                          { label: "View player", icon: <User className="h-4 w-4" />, onClick: () => router.push(`/players/${p.player_id}`), hidden: !p.player_id },
+                          { label: "View parent", icon: <Users className="h-4 w-4" />, onClick: () => { const c = primaryContact(p); if (c?.id) router.push(`/contacts/${c.id}`) }, hidden: !primaryContact(p)?.id },
+                          { label: "WhatsApp", icon: <MessageCircle className="h-4 w-4" />, onClick: () => { const url = waLink(primaryContact(p)?.phone); if (url) window.open(url, "_blank") }, hidden: !waLink(primaryContact(p)?.phone) },
+                          { label: "Remove", icon: <Trash2 className="h-4 w-4" />, onClick: () => setRemoveId(p.id), variant: "danger" },
+                        ]} />
                       </td>
                     )}
                   </tr>

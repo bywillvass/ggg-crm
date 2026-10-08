@@ -57,10 +57,12 @@ export function OneOffEmailDialog({
       return
     }
     setSending(true)
+    const isHtml = body.trimStart().startsWith("<")
     const res = await sendOneOffEmail({
       contactId,
       subject: subject.trim(),
-      bodyText: body,
+      bodyHtml: isHtml ? body : null,
+      bodyText: isHtml ? null : body,
       eventId: eventId ?? null,
       playerId: playerId ?? null,
       invoiceId: invoiceId ?? null,

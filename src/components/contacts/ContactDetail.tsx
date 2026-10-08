@@ -511,6 +511,9 @@ export function ContactDetail({ contact: initial }: Props) {
         contactName={`${contact.first_name ?? ""} ${contact.last_name ?? ""}`.trim() || "Contact"}
         contactEmail={contact.email}
         contactUnsubscribedAt={contact.unsubscribed_at}
+        playerId={
+          (contact.player_contacts?.find((pc) => pc.is_primary) ?? contact.player_contacts?.[0])?.player_id ?? undefined
+        }
         onSent={() => router.refresh()}
       />
 

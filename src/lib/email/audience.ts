@@ -6,7 +6,7 @@ type ParticipantStatus = Database["public"]["Enums"]["participant_status"]
 export type AudienceContact = Pick<
   Tables<"contacts">,
   "id" | "first_name" | "last_name" | "email" | "unsubscribed_at" | "marketing_consent" | "tags"
->
+> & { player_id?: string | null }
 
 export type AudienceFilter = {
   type: "contacts" | "leads" | "event" | "fixed"
@@ -23,6 +23,22 @@ export type AudienceFilter = {
 
 function isAudienceFilter(x: unknown): x is AudienceFilter {
   return !!x && typeof x === "object" && "type" in (x as Record<string, unknown>)
+}
+
+async function attachPrimaryPlayers(contacts: AudienceContact[]): Promise<AudienceContact[]> {
+  if (contacts.length === 0) return contacts
+  const ids = contacts.map((c) => c.id)
+  // Fetch all player_contacts, primary first; take first match per contact
+  const { data } = await serviceClient
+    .from("player_contacts")
+    .select("contact_id, player_id, is_primary")
+    .in("contact_id", ids)
+    .order("is_primary", { ascending: false })
+  const map = new Map<string, string>()
+  for (const r of data ?? []) {
+    if (!map.has(r.contact_id)) map.set(r.contact_id, r.player_id)
+  }
+  return contacts.map((c) => ({ ...c, player_id: map.get(c.id) ?? null }))
 }
 
 export async function resolveAudienceServer(
@@ -44,6 +60,7 @@ export async function resolveAudienceServer(
       .in("id", ids)
       .is("archived_at", null)
     candidates = (data ?? []) as AudienceContact[]
+    candidates = await attachPrimaryPlayers(candidates)
   } else if (audience.type === "contacts") {
     let q = serviceClient
       .from("contacts")
@@ -62,11 +79,12 @@ export async function resolveAudienceServer(
     }
     const { data } = await q
     candidates = (data ?? []) as AudienceContact[]
+    candidates = await attachPrimaryPlayers(candidates)
   } else if (audience.type === "leads") {
     const filters = audience.filters ?? {}
     let q = serviceClient
       .from("leads")
-      .select("contact_id, contacts(id, first_name, last_name, email, unsubscribed_at, marketing_consent, tags)")
+      .select("contact_id, player_id, contacts(id, first_name, last_name, email, unsubscribed_at, marketing_consent, tags)")
       .is("archived_at", null)
       .not("contact_id", "is", null)
 
@@ -80,9 +98,9 @@ export async function resolveAudienceServer(
     const { data } = await q
     const uniq = new Map<string, AudienceContact>()
     for (const row of data ?? []) {
-      const r = row as unknown as { contacts: AudienceContact | null }
+      const r = row as unknown as { player_id: string | null; contacts: AudienceContact | null }
       if (r.contacts && !uniq.has(r.contacts.id)) {
-        uniq.set(r.contacts.id, r.contacts)
+        uniq.set(r.contacts.id, { ...r.contacts, player_id: r.player_id ?? null })
       }
     }
     candidates = Array.from(uniq.values())
@@ -109,6 +127,7 @@ export async function resolveAudienceServer(
     for (const row of data ?? []) {
       const r = row as unknown as {
         contact_id: string | null
+        player_id: string | null
         players: {
           player_contacts: {
             is_primary: boolean
@@ -119,13 +138,13 @@ export async function resolveAudienceServer(
       }
       // Prefer direct contact if present
       if (r.contacts && !uniq.has(r.contacts.id)) {
-        uniq.set(r.contacts.id, r.contacts)
+        uniq.set(r.contacts.id, { ...r.contacts, player_id: r.player_id ?? null })
       }
-      // Also include primary player_contact
+      // Also include primary player_contact (the parent), linked to the same player
       if (r.players) {
         const primary = r.players.player_contacts?.find((pc) => pc.is_primary)?.contacts
         if (primary && !uniq.has(primary.id)) {
-          uniq.set(primary.id, primary)
+          uniq.set(primary.id, { ...primary, player_id: r.player_id ?? null })
         }
       }
     }

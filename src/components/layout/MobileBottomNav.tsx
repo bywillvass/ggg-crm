@@ -8,6 +8,7 @@ import {
   UserRound,
   ClipboardList,
   Users,
+  Contact2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/providers/AuthProvider'
@@ -17,6 +18,7 @@ const adminMobileNav = [
   { href: '/leads', label: 'Leads', icon: Users },
   { href: '/events', label: 'Events', icon: Calendar },
   { href: '/players', label: 'Players', icon: UserRound },
+  { href: '/contacts', label: 'Parents', icon: Contact2 },
 ]
 
 const coachMobileNav = [

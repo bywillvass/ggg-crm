@@ -14,11 +14,20 @@ import {
   Upload,
   Archive,
   UserCheck,
-  ArrowLeft,
-  ChevronRight,
   MapPin,
   CalendarPlus,
   CalendarCheck,
+  Mail,
+  Tag,
+  ExternalLink,
+  Phone,
+  MessageSquare,
+  StickyNote,
+  CheckSquare,
+  MessageCircle,
+  User,
+  Users,
+  MoreHorizontal,
 } from "lucide-react"
 import {
   DndContext,
@@ -51,7 +60,9 @@ import {
   bulkUpdateStage,
   bulkAssignOwner,
   bulkArchive,
+  archiveLead,
   createLead,
+  bulkAddTagToLeads,
   type LeadWithRelations,
 } from "@/app/(app)/leads/actions"
 import { createContact } from "@/app/(app)/contacts/actions"
@@ -59,10 +70,15 @@ import { createPlayer } from "@/app/(app)/players/actions"
 import type { Database, Tables } from "@/lib/database.types"
 import { phoneSearchKey, isPhoneQuery } from "@/lib/phone"
 import { AddToEventDialog } from "./AddToEventDialog"
+import { AddActivityDialog } from "@/components/shared/AddActivityDialog"
+import { LeadDrawer } from "./LeadDrawer"
+import { CampaignComposer } from "@/components/email/CampaignComposer"
+import { RowMenu } from "@/components/shared/RowMenu"
+import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 
 type LeadStage = Database["public"]["Enums"]["lead_stage"]
 type LeadSource = Database["public"]["Enums"]["lead_source"]
-type ViewMode = "overview" | "board" | "table"
+type ViewMode = "board" | "table"
 
 const STAGES: LeadStage[] = ["new", "contacted", "interested", "confirmed", "signed", "not_interested", "lost"]
 const SOURCES: LeadSource[] = ["website", "meta_instant_form", "newsletter", "referral", "manual", "import", "other"]
@@ -155,6 +171,26 @@ function getCityFromLead(lead: LeadWithRelations): string | null {
   return null
 }
 
+function getStateFromLead(lead: LeadWithRelations): string | null {
+  if (lead.contacts?.state) return lead.contacts.state
+  if (lead.players?.state) return lead.players.state
+  const raw = lead.raw as Record<string, unknown> | null
+  if (raw) {
+    for (const key of ["state", "State", "province", "Province", "region"]) {
+      const val = raw[key]
+      if (val && typeof val === "string" && val.trim()) return val.trim()
+    }
+  }
+  return null
+}
+
+function getLocationLabel(lead: LeadWithRelations): string | null {
+  const city = getCityFromLead(lead)
+  const state = getStateFromLead(lead)
+  if (city && state) return `${city}, ${state}`
+  return city ?? state ?? null
+}
+
 const FORM_TYPE_LABELS: Record<string, string> = {
   contact: "Contact Form",
   eoi: "Expression of Interest",
@@ -229,15 +265,20 @@ function KanbanColumn({ stage, leads, onCardClick }: { stage: LeadStage; leads: 
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-type Props = { leads: LeadWithRelations[]; profiles: Tables<"profiles">[] }
+type Props = {
+  leads: LeadWithRelations[]
+  profiles: Tables<"profiles">[]
+  emailTemplates?: EmailTemplateRow[]
+  emailEvents?: Pick<Tables<"events">, "id" | "title" | "start_at" | "timezone">[]
+}
 
-export function LeadsShell({ leads: initialLeads, profiles }: Props) {
+export function LeadsShell({ leads: initialLeads, profiles, emailTemplates = [], emailEvents = [] }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [view, setView] = useState<ViewMode>(() => {
     const v = searchParams.get("view")
-    return (v === "board" || v === "table") ? v : "overview"
+    return v === "board" ? "board" : "table"
   })
   const [leads, setLeads] = useState(initialLeads)
   const [search, setSearch] = useState(() => searchParams.get("q") ?? "")
@@ -268,6 +309,14 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
   const [bulkOwner, setBulkOwner] = useState("")
   const [saving, setSaving] = useState(false)
   const [addToEventLead, setAddToEventLead] = useState<{ id: string; name: string } | null>(null)
+  const [bulkAddEventOpen, setBulkAddEventOpen] = useState(false)
+  const [bulkEmailOpen, setBulkEmailOpen] = useState(false)
+  const [bulkTagOpen, setBulkTagOpen] = useState(false)
+  const [bulkTagValue, setBulkTagValue] = useState("")
+  const [activityLead, setActivityLead] = useState<{ id: string; contactId?: string; playerId?: string } | null>(null)
+  const [rowChangeStageLead, setRowChangeStageLead] = useState<{ id: string } | null>(null)
+  const [drawerLead, setDrawerLead] = useState<LeadWithRelations | null>(null)
+  const [rowChangeStageValue, setRowChangeStageValue] = useState<LeadStage>("contacted")
   const [newForm, setNewForm] = useState({
     source: "manual" as LeadSource, form_type: "", stage: "new" as LeadStage, owner_id: "",
     contact_first_name: "", contact_last_name: "", contact_email: "", contact_phone: "",
@@ -283,7 +332,7 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
       form: filterFormType || filterSource ? `${filterFormType}|||${filterSource}` : "",
       year: filterBirthYear, squad: filterSquad, st: filterState,
       level: filterLevel, campaign: filterCampaign, player: filterHasPlayer,
-      view: view === "overview" ? "" : view,
+      view: view,
     }
     const merged = { ...cur, ...overrides }
     const params = new URLSearchParams()
@@ -322,23 +371,6 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
 
   // Derived stats
   const now = Date.now()
-  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000
-  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000
-
-  const recentLeads = useMemo(() =>
-    leads.filter((l) => new Date(l.created_at).getTime() > thirtyDaysAgo)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
-    [leads, thirtyDaysAgo]
-  )
-
-  const formTypeBreakdown = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const l of leads) {
-      const ft = l.form_type ?? "unknown"
-      counts[ft] = (counts[ft] ?? 0) + 1
-    }
-    return Object.entries(counts).sort((a, b) => b[1] - a[1])
-  }, [leads])
 
   type FormCard = { key: string; formType: string; source: string; count: number; cities: [string, number][] }
   const formBreakdown = useMemo((): FormCard[] => {
@@ -365,24 +397,8 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1])
   }, [leads])
 
-  const stageCounts = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const l of leads) counts[l.stage] = (counts[l.stage] ?? 0) + 1
-    return counts
-  }, [leads])
-
-  const newThisWeek = useMemo(() =>
-    leads.filter((l) => new Date(l.created_at).getTime() > sevenDaysAgo).length,
-    [leads, sevenDaysAgo]
-  )
-
-  const followUpsDue = useMemo(() =>
-    leads.filter((l) => l.next_follow_up_at && new Date(l.next_follow_up_at).getTime() <= now).length,
-    [leads, now]
-  )
-
-  // Filtered list for table/board
-  const filtered = useMemo(() => {
+  // All filters EXCEPT stage
+  const filteredBase = useMemo(() => {
     let result = leads
     if (search) {
       if (isPhoneQuery(search)) {
@@ -404,7 +420,6 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
       }
     }
     if (filterSource) result = result.filter((l) => l.source === filterSource)
-    if (filterStage) result = result.filter((l) => l.stage === filterStage)
     if (filterOwner) result = result.filter((l) => l.owner_id === filterOwner)
     if (filterFormType) result = result.filter((l) => (l.form_type ?? "unknown") === filterFormType)
     if (filterCity) result = result.filter((l) => getCityFromLead(l) === filterCity)
@@ -422,7 +437,20 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     if (filterHasPlayer === "yes") result = result.filter((l) => l.player_id != null)
     if (filterHasPlayer === "no") result = result.filter((l) => l.player_id == null)
     return result
-  }, [leads, search, filterSource, filterStage, filterOwner, filterFormType, filterCity, filterBirthYear, filterSquad, filterState, filterLevel, filterCampaign, filterHasPlayer])
+  }, [leads, search, filterSource, filterOwner, filterFormType, filterCity, filterBirthYear, filterSquad, filterState, filterLevel, filterCampaign, filterHasPlayer])
+
+  // Stage counts from filteredBase (so they reflect other active filters)
+  const stageCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const l of filteredBase) counts[l.stage] = (counts[l.stage] ?? 0) + 1
+    return counts
+  }, [filteredBase])
+
+  // Final filtered = filteredBase + stage tab filter
+  const filtered = useMemo(() => {
+    if (!filterStage) return filteredBase
+    return filteredBase.filter((l) => l.stage === filterStage)
+  }, [filteredBase, filterStage])
 
   const boardLeads = useMemo(() => {
     const cols: Record<LeadStage, LeadWithRelations[]> = {
@@ -434,41 +462,6 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
 
   const pageCount = Math.ceil(filtered.length / PAGE_SIZE)
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-
-  function drillIntoForm(formType: string, source: string) {
-    setFilterFormType(formType); setFilterSource(source); setFilterStage(""); setFilterCity(""); setSearch("")
-    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
-    setPage(1); setView("table")
-    updateURL({ form: `${formType}|||${source}`, stage: "", city: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
-  }
-
-  function drillIntoFormCity(formType: string, source: string, city: string) {
-    setFilterFormType(formType); setFilterSource(source); setFilterCity(city); setFilterStage(""); setSearch("")
-    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
-    setPage(1); setView("table")
-    updateURL({ form: `${formType}|||${source}`, city, stage: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
-  }
-
-  function drillIntoStage(stage: string) {
-    setFilterStage(stage); setFilterSource(""); setFilterFormType(""); setFilterCity(""); setSearch("")
-    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
-    setPage(1); setView("table")
-    updateURL({ stage, form: "", city: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
-  }
-
-  function drillIntoCity(city: string) {
-    setFilterCity(city); setFilterSource(""); setFilterStage(""); setFilterFormType(""); setSearch("")
-    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
-    setPage(1); setView("table")
-    updateURL({ city, form: "", stage: "", q: "", year: "", squad: "", st: "", level: "", campaign: "", player: "", view: "table" })
-  }
-
-  function goToOverview() {
-    setFilterSource(""); setFilterStage(""); setFilterFormType(""); setFilterCity(""); setSearch("")
-    setFilterBirthYear(""); setFilterSquad(""); setFilterState(""); setFilterLevel(""); setFilterCampaign(""); setFilterHasPlayer("")
-    setPage(1); setView("overview")
-    router.replace(pathname, { scroll: false })
-  }
 
   // Kanban drag
   function handleDragStart(event: DragStartEvent) {
@@ -517,8 +510,42 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     }
   }
 
-  function handleExportCSV() {
-    const csv = Papa.unparse(filtered.map((l) => ({
+  async function handleBulkTag() {
+    if (!bulkTagValue.trim()) return
+    const result = await bulkAddTagToLeads(Array.from(selected), bulkTagValue.trim())
+    if (result.error) { toast.error(result.error) } else {
+      toast.success(`Tag added to ${selected.size} leads`)
+      setBulkTagOpen(false); setBulkTagValue(""); setSelected(new Set()); router.refresh()
+    }
+  }
+
+  async function handleRowArchive(lead: LeadWithRelations) {
+    if (!confirm(`Archive lead for ${lead.contacts?.first_name ?? "this contact"}?`)) return
+    const result = await archiveLead(lead.id)
+    if (result.error) toast.error(result.error)
+    else { toast.success("Lead archived"); router.refresh() }
+  }
+
+  async function handleRowChangeStage() {
+    if (!rowChangeStageLead) return
+    const result = await updateLeadStage(rowChangeStageLead.id, rowChangeStageValue)
+    if (result.error) toast.error(result.error)
+    else { toast.success("Stage updated"); setRowChangeStageLead(null); router.refresh() }
+  }
+
+  function waLink(phone: string | null | undefined): string | null {
+    if (!phone) return null
+    const digits = phone.replace(/\D/g, "")
+    if (digits.length < 8) return null
+    const e164 = digits.startsWith("0") ? `61${digits.slice(1)}` : digits
+    return `https://wa.me/${e164}`
+  }
+
+  function exportSelected() {
+    const toExport = selected.size > 0
+      ? leads.filter((l) => selected.has(l.id))
+      : filtered
+    const csv = Papa.unparse(toExport.map((l) => ({
       contact_name: `${l.contacts?.first_name ?? ""} ${l.contacts?.last_name ?? ""}`.trim(),
       contact_email: l.contacts?.email ?? "", contact_phone: l.contacts?.phone ?? "",
       city: getCityFromLead(l) ?? "",
@@ -532,6 +559,10 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }))
     a.download = `leads-${format(new Date(), "yyyy-MM-dd")}.csv`
     a.click()
+  }
+
+  function bulkContactIds(): string[] {
+    return leads.filter((l) => selected.has(l.id) && l.contact_id).map((l) => l.contact_id!)
   }
 
   async function handleCreateLead(e: React.FormEvent) {
@@ -556,218 +587,55 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
 
   // ─── Shared header ──────────────────────────────────────────────────────────
 
-  const activeFilterLabel = (() => {
-    const parts: string[] = []
-    if (filterFormType) parts.push(formatFormType(filterFormType === "unknown" ? "No form type" : filterFormType))
-    if (filterSource) parts.push(SOURCE_LABELS[filterSource] ?? filterSource)
-    if (filterCity) parts.push(filterCity)
-    if (filterBirthYear) parts.push(filterBirthYear)
-    if (filterSquad) parts.push(filterSquad)
-    if (filterState) parts.push(filterState)
-    if (filterLevel) parts.push(filterLevel)
-    if (filterCampaign) parts.push(filterCampaign)
-    if (parts.length) return parts.join(" · ")
-    if (filterStage) return STAGE_LABELS[filterStage] ?? filterStage
-    return null
-  })()
-
   return (
     <div className="flex flex-col h-full">
       {/* Top bar */}
       <div className="flex items-center justify-between px-6 py-4 border-b bg-white gap-3 shrink-0">
         <div className="flex items-center gap-3">
-          {view !== "overview" && (
-            <button onClick={goToOverview} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors">
-              <ArrowLeft className="h-4 w-4" />
-              Overview
-            </button>
-          )}
-          <h1 className="text-xl font-semibold text-gray-900">
-            {view === "overview" ? "Leads" : activeFilterLabel ? `Leads — ${activeFilterLabel}` : "All Leads"}
-          </h1>
+          <h1 className="text-xl font-semibold text-gray-900">Leads</h1>
           <span className="text-sm text-gray-400">{leads.length.toLocaleString()} total</span>
         </div>
         <div className="flex items-center gap-2">
-          {view !== "overview" && (
-            <div className="flex rounded-lg border overflow-hidden">
-              <button onClick={() => { setView("board"); updateURL({ view: "board" }) }} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "board" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
-                <LayoutGrid className="h-3.5 w-3.5" /> Board
-              </button>
-              <button onClick={() => { setView("table"); updateURL({ view: "table" }) }} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "table" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
-                <List className="h-3.5 w-3.5" /> Table
-              </button>
-            </div>
-          )}
+          <div className="flex rounded-lg border overflow-hidden">
+            <button onClick={() => { setView("board"); updateURL({ view: "board" }) }} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "board" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
+              <LayoutGrid className="h-3.5 w-3.5" /> Board
+            </button>
+            <button onClick={() => { setView("table"); updateURL({ view: "table" }) }} className={cn("px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors", view === "table" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50")}>
+              <List className="h-3.5 w-3.5" /> Table
+            </button>
+          </div>
           <Button onClick={() => setNewDialogOpen(true)} className="bg-[#C9A227] hover:bg-[#b8911f] text-white">
             <Plus className="h-4 w-4 mr-1.5" /> New lead
           </Button>
         </div>
       </div>
 
+      {/* Stage tabs */}
+      <div className="flex items-center gap-1 px-6 pt-4 flex-wrap">
+        {[{ key: "", label: "All", count: filteredBase.length }, ...STAGES.map(s => ({ key: s, label: STAGE_LABELS[s], count: stageCounts[s] ?? 0 }))].map(({ key, label, count }) => (
+          <button
+            key={key}
+            onClick={() => { setFilterStage(key); setPage(1); updateURL({ stage: key }) }}
+            className={cn(
+              "px-3 py-1.5 rounded-full text-sm font-medium transition-colors flex items-center gap-1.5",
+              filterStage === key
+                ? "bg-[#0C0F4C] text-white"
+                : "text-gray-600 hover:bg-gray-100"
+            )}
+          >
+            {label}
+            <span className={cn("text-xs rounded-full px-1.5 py-0.5 font-medium", filterStage === key ? "bg-white/20 text-white" : "bg-gray-100 text-gray-500")}>
+              {count}
+            </span>
+          </button>
+        ))}
+      </div>
+
       <div className="flex-1 overflow-y-auto">
 
-        {/* ── OVERVIEW ── */}
-        {view === "overview" && (
-          <div className="px-6 py-5 space-y-6">
-
-            {/* Stat row */}
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-white rounded-xl border border-gray-200 px-5 py-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">Total Active</p>
-                <p className="text-3xl font-bold text-[#0C0F4C] mt-1">{leads.length.toLocaleString()}</p>
-              </div>
-              <div className="bg-white rounded-xl border border-gray-200 px-5 py-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">New This Week</p>
-                <p className="text-3xl font-bold text-[#0C0F4C] mt-1">{newThisWeek}</p>
-              </div>
-              <div className={cn("rounded-xl border px-5 py-4", followUpsDue > 0 ? "bg-orange-50 border-orange-200" : "bg-white border-gray-200")}>
-                <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">Follow-ups Due</p>
-                <p className={cn("text-3xl font-bold mt-1", followUpsDue > 0 ? "text-orange-600" : "text-[#0C0F4C]")}>{followUpsDue}</p>
-              </div>
-            </div>
-
-            {/* Stage pipeline */}
-            <div>
-              <h2 className="text-sm font-semibold text-gray-700 mb-3">Pipeline</h2>
-              <div className="grid grid-cols-7 gap-2">
-                {STAGES.map((stage) => {
-                  const count = stageCounts[stage] ?? 0
-                  const pct = leads.length > 0 ? (count / leads.length) * 100 : 0
-                  return (
-                    <button
-                      key={stage}
-                      onClick={() => drillIntoStage(stage)}
-                      className="group bg-white rounded-xl border border-gray-200 p-3 text-center hover:border-[#0C0F4C] hover:shadow-sm transition-all"
-                    >
-                      <p className="text-2xl font-bold text-[#0C0F4C] group-hover:text-[#C9A227] transition-colors">{count}</p>
-                      <div className={cn("mt-2 text-xs font-medium px-2 py-0.5 rounded-full border inline-block", STAGE_COLOURS[stage])}>
-                        {STAGE_LABELS[stage]}
-                      </div>
-                      <div className="mt-2 h-1 bg-gray-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-[#0C0F4C] rounded-full transition-all" style={{ width: `${pct}%` }} />
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Forms — one card per form type × source combination, auto-discovered */}
-            {formBreakdown.length > 0 && (
-              <div>
-                <h2 className="text-sm font-semibold text-gray-700 mb-3">Forms</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {formBreakdown.map(({ key, formType, source, count, cities }) => (
-                    <button
-                      key={key}
-                      onClick={() => drillIntoForm(formType, source)}
-                      className="group flex flex-col rounded-xl border border-gray-200 bg-white px-5 py-4 hover:border-[#0C0F4C] hover:shadow-sm transition-all text-left"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-semibold text-[#0C0F4C] truncate">
-                            {formType === "unknown" ? "No form type" : formatFormType(formType)}
-                          </p>
-                          <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium mt-1.5 inline-block", SOURCE_COLOURS[source] ?? "bg-gray-50 border-gray-200 text-gray-600")}>
-                            {SOURCE_LABELS[source] ?? source}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <span className="text-3xl font-bold text-[#0C0F4C]">{count}</span>
-                          <ChevronRight className="h-4 w-4 opacity-40 group-hover:opacity-80 transition-opacity mt-1" />
-                        </div>
-                      </div>
-                      {cities.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100">
-                          {cities.slice(0, 5).map(([city, n]) => (
-                            <span
-                              key={city}
-                              onClick={(e) => { e.stopPropagation(); drillIntoFormCity(formType, source, city) }}
-                              className="flex items-center gap-1 text-xs bg-gray-100 hover:bg-[#0C0F4C] hover:text-white text-gray-600 rounded-full px-2.5 py-1 cursor-pointer transition-colors"
-                            >
-                              <MapPin className="h-2.5 w-2.5" />{city} <span className="font-semibold">{n}</span>
-                            </span>
-                          ))}
-                          {cities.length > 5 && (
-                            <span className="text-xs text-gray-400 self-center">+{cities.length - 5} more</span>
-                          )}
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Recent leads */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-gray-700">Recent Leads <span className="text-gray-400 font-normal">(last 30 days)</span></h2>
-                <button onClick={() => { setFilterSource(""); setFilterStage(""); setView("table"); updateURL({ form: "", stage: "", view: "table" }) }} className="text-xs text-[#0C0F4C] hover:underline">
-                  View all →
-                </button>
-              </div>
-              {recentLeads.length === 0 ? (
-                <p className="text-sm text-gray-400">No leads in the last 30 days.</p>
-              ) : (
-                <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-gray-50 text-left">
-                        <th className="px-4 py-2.5 text-xs font-medium text-gray-500">Contact</th>
-                        <th className="px-4 py-2.5 text-xs font-medium text-gray-500 hidden md:table-cell">Player</th>
-                        <th className="px-4 py-2.5 text-xs font-medium text-gray-500">Form</th>
-                        <th className="px-4 py-2.5 text-xs font-medium text-gray-500">Stage</th>
-                        <th className="px-4 py-2.5 text-xs font-medium text-gray-500 hidden lg:table-cell">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {recentLeads.slice(0, 20).map((lead) => (
-                        <tr key={lead.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-3">
-                            <Link href={`/leads/${lead.id}`} className="font-medium text-[#0C0F4C] hover:underline">
-                              {lead.contacts?.first_name} {lead.contacts?.last_name}
-                            </Link>
-                            {lead.contacts?.phone && <p className="text-xs text-gray-400">{lead.contacts.phone}</p>}
-                          </td>
-                          <td className="px-4 py-3 text-gray-600 text-xs hidden md:table-cell">
-                            {lead.players ? `${lead.players.first_name} ${lead.players.last_name}${lead.players.birth_year ? ` (${lead.players.birth_year})` : ""}` : <span className="text-gray-300">—</span>}
-                          </td>
-                          <td className="px-4 py-3">
-                            <p className="text-xs font-medium text-gray-700">{lead.form_type ? formatFormType(lead.form_type) : "—"}</p>
-                            <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium mt-0.5 inline-block", SOURCE_COLOURS[lead.source] ?? "bg-gray-100 text-gray-600 border-gray-200")}>
-                              {SOURCE_LABELS[lead.source] ?? lead.source}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium", STAGE_COLOURS[lead.stage])}>
-                              {STAGE_LABELS[lead.stage]}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-xs text-gray-400 hidden lg:table-cell">
-                            {format(new Date(lead.created_at), "d MMM yyyy")}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {recentLeads.length > 20 && (
-                    <div className="px-4 py-3 border-t bg-gray-50 text-center">
-                      <button onClick={() => { setFilterSource(""); setFilterStage(""); setView("table"); updateURL({ form: "", stage: "", view: "table" }) }} className="text-xs text-[#0C0F4C] hover:underline">
-                        +{recentLeads.length - 20} more — view all
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* ── TABLE / BOARD views ── */}
-        {view !== "overview" && (
-          <div className="px-6 py-4 space-y-4">
-            {/* Filter bar */}
+        <div className="px-6 py-4 space-y-4">
+          {/* Filter bar */}
             <div className="flex flex-wrap gap-3">
               <div className="relative flex-1 min-w-48">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -869,24 +737,45 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
             {view === "table" && (
               <>
                 {selected.size > 0 && (
-                  <div className="flex items-center gap-3 rounded-lg border bg-blue-50 px-4 py-2">
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-blue-50 px-4 py-2">
                     <span className="text-sm font-medium">{selected.size} selected</span>
                     <Button size="sm" variant="outline" onClick={() => setBulkStageOpen(true)}>Change stage</Button>
                     <Button size="sm" variant="outline" onClick={() => setBulkOwnerOpen(true)}>
                       <UserCheck className="h-3.5 w-3.5 mr-1.5" /> Assign owner
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => setBulkAddEventOpen(true)}>
+                      <CalendarPlus className="h-3.5 w-3.5 mr-1.5" /> Add to event
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setBulkEmailOpen(true)}>
+                      <Mail className="h-3.5 w-3.5 mr-1.5" /> Send email
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setBulkTagOpen(true)}>
+                      <Tag className="h-3.5 w-3.5 mr-1.5" /> Add tag
+                    </Button>
                     <Button size="sm" variant="outline" onClick={handleBulkArchive} className="text-red-600 hover:text-red-700">
                       <Archive className="h-3.5 w-3.5 mr-1.5" /> Archive
                     </Button>
-                    <Button size="sm" variant="outline" onClick={handleExportCSV} className="ml-auto">
-                      <Download className="h-3.5 w-3.5 mr-1.5" /> Export CSV
+                    <Button size="sm" variant="outline" onClick={exportSelected} className="ml-auto">
+                      <Download className="h-3.5 w-3.5 mr-1.5" /> Export selected
                     </Button>
                     <Link href="/leads/import"><Button size="sm" variant="outline"><Upload className="h-3.5 w-3.5 mr-1.5" /> Import</Button></Link>
                   </div>
                 )}
+                {/* Select all filtered banner */}
+                {selected.size > 0 && selected.size === paginated.length && selected.size < filtered.length && (
+                  <div className="text-center text-sm text-gray-600 bg-blue-50 rounded-lg py-2 px-4">
+                    All {paginated.length} on this page selected.{" "}
+                    <button
+                      className="text-[#0C0F4C] font-medium hover:underline"
+                      onClick={() => setSelected(new Set(filtered.map((l) => l.id)))}
+                    >
+                      Select all {filtered.length} leads matching this filter
+                    </button>
+                  </div>
+                )}
                 {selected.size === 0 && (
                   <div className="flex justify-end gap-2">
-                    <Button size="sm" variant="outline" onClick={handleExportCSV}><Download className="h-3.5 w-3.5 mr-1.5" /> Export CSV</Button>
+                    <Button size="sm" variant="outline" onClick={exportSelected}><Download className="h-3.5 w-3.5 mr-1.5" /> Export CSV</Button>
                     <Link href="/leads/import"><Button size="sm" variant="outline"><Upload className="h-3.5 w-3.5 mr-1.5" /> Import</Button></Link>
                   </div>
                 )}
@@ -896,51 +785,68 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                     <thead>
                       <tr className="border-b bg-gray-50 text-left">
                         <th className="w-8 px-3 py-3">
-                          <input type="checkbox" checked={selected.size === paginated.length && paginated.length > 0}
-                            onChange={() => selected.size === paginated.length ? setSelected(new Set()) : setSelected(new Set(paginated.map((l) => l.id)))}
+                          <input type="checkbox"
+                            checked={paginated.length > 0 && paginated.every((l) => selected.has(l.id))}
+                            onChange={() => {
+                              const pageIds = paginated.map((l) => l.id)
+                              const allPageSelected = pageIds.every((id) => selected.has(id))
+                              setSelected((prev) => {
+                                const next = new Set(prev)
+                                if (allPageSelected) pageIds.forEach((id) => next.delete(id))
+                                else pageIds.forEach((id) => next.add(id))
+                                return next
+                              })
+                            }}
                             className="rounded" />
                         </th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide">Contact</th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide hidden md:table-cell">Player</th>
+                        <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide hidden lg:table-cell">Location</th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide hidden lg:table-cell">Source</th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide">Stage</th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide hidden xl:table-cell">Owner</th>
                         <th className="px-3 py-3 font-medium text-gray-600 text-xs uppercase tracking-wide hidden xl:table-cell">Submitted</th>
-                        <th className="w-10 px-3 py-3" />
+                        <th className="w-10 px-2 py-3" />
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {paginated.length === 0 ? (
-                        <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">No leads found</td></tr>
+                        <tr><td colSpan={9} className="px-3 py-8 text-center text-gray-400">No leads found</td></tr>
                       ) : (
                         paginated.map((lead) => (
-                          <tr key={lead.id} className="hover:bg-gray-50">
-                            <td className="px-3 py-3">
+                          <tr key={lead.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDrawerLead(lead)}>
+                            <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                               <input type="checkbox" checked={selected.has(lead.id)}
                                 onChange={() => setSelected((prev) => { const n = new Set(prev); n.has(lead.id) ? n.delete(lead.id) : n.add(lead.id); return n })}
                                 className="rounded" onClick={(e) => e.stopPropagation()} />
                             </td>
                             <td className="px-3 py-3">
-                              <Link href={`/leads/${lead.id}`} className="font-medium text-[#0C0F4C] hover:underline">
+                              <p className="font-medium text-[#0C0F4C]">
                                 {lead.contacts?.first_name} {lead.contacts?.last_name}
-                              </Link>
+                              </p>
                               {lead.contacts?.phone && <p className="text-xs text-gray-400">{lead.contacts.phone}</p>}
-                              {getCityFromLead(lead) && <p className="text-xs text-gray-400 flex items-center gap-0.5"><MapPin className="h-2.5 w-2.5" />{getCityFromLead(lead)}</p>}
                             </td>
                             <td className="px-3 py-3 text-gray-600 hidden md:table-cell">
                               {lead.players ? (
-                                <Link href={`/players/${lead.player_id}`} className="hover:underline text-sm">
+                                <span className="text-sm">
                                   {lead.players.first_name} {lead.players.last_name}
                                   {lead.players.birth_year && <span className="text-gray-400"> ({lead.players.birth_year})</span>}
-                                </Link>
+                                </span>
                               ) : <span className="text-gray-300">—</span>}
-                              {/* Show event badge if lead has been added to an event */}
                               {(lead.event_participants?.length ?? 0) > 0 && (
                                 <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1">
                                   <CalendarCheck className="h-3 w-3" />
                                   {(lead.event_participants as { event_id: string; events: { title: string } | null }[])[0]?.events?.title}
                                 </p>
                               )}
+                            </td>
+                            <td className="px-3 py-3 hidden lg:table-cell">
+                              {getLocationLabel(lead) ? (
+                                <span className="text-sm text-gray-600 flex items-center gap-1">
+                                  <MapPin className="h-3 w-3 text-gray-400 shrink-0" />
+                                  {getLocationLabel(lead)}
+                                </span>
+                              ) : <span className="text-gray-300">—</span>}
                             </td>
                             <td className="px-3 py-3 hidden lg:table-cell">
                               <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium", SOURCE_COLOURS[lead.source] ?? "bg-gray-100 text-gray-600 border-gray-200")}>
@@ -954,14 +860,19 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
                             <td className="px-3 py-3 text-gray-400 text-xs hidden xl:table-cell">
                               {format(new Date(lead.created_at), "d MMM yyyy")}
                             </td>
-                            <td className="px-2 py-3">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setAddToEventLead({ id: lead.id, name: `${lead.contacts?.first_name ?? ""} ${lead.contacts?.last_name ?? ""}`.trim() }) }}
-                                title="Add to event"
-                                className="text-gray-300 hover:text-[#0C0F4C] transition-colors"
-                              >
-                                <CalendarPlus className="h-4 w-4" />
-                              </button>
+                            <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                              <RowMenu items={[
+                                { label: "Open", icon: <ExternalLink className="h-4 w-4" />, onClick: () => router.push(`/leads/${lead.id}`) },
+                                { label: "Change stage", icon: <CheckSquare className="h-4 w-4" />, onClick: () => { setRowChangeStageLead({ id: lead.id }); setRowChangeStageValue(lead.stage) } },
+                                { label: "Add to event", icon: <CalendarPlus className="h-4 w-4" />, onClick: () => setAddToEventLead({ id: lead.id, name: `${lead.contacts?.first_name ?? ""} ${lead.contacts?.last_name ?? ""}`.trim() }) },
+                                { label: "Log call", icon: <Phone className="h-4 w-4" />, onClick: () => setActivityLead({ id: lead.id, contactId: lead.contact_id ?? undefined, playerId: lead.player_id ?? undefined }) },
+                                { label: "Log SMS", icon: <MessageSquare className="h-4 w-4" />, onClick: () => setActivityLead({ id: lead.id, contactId: lead.contact_id ?? undefined, playerId: lead.player_id ?? undefined }) },
+                                { label: "Add note", icon: <StickyNote className="h-4 w-4" />, onClick: () => setActivityLead({ id: lead.id, contactId: lead.contact_id ?? undefined, playerId: lead.player_id ?? undefined }) },
+                                { label: "WhatsApp parent", icon: <MessageCircle className="h-4 w-4" />, onClick: () => { const url = waLink(lead.contacts?.phone); if (url) window.open(url, "_blank"); else toast.error("No phone number on file") }, hidden: !lead.contact_id },
+                                { label: "View player", icon: <User className="h-4 w-4" />, onClick: () => router.push(`/players/${lead.player_id}`), hidden: !lead.player_id },
+                                { label: "View parent", icon: <Users className="h-4 w-4" />, onClick: () => router.push(`/contacts/${lead.contact_id}`), hidden: !lead.contact_id },
+                                { label: "Archive", icon: <Archive className="h-4 w-4" />, onClick: () => handleRowArchive(lead), variant: "danger" },
+                              ]} />
                             </td>
                           </tr>
                         ))
@@ -982,7 +893,6 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
               </>
             )}
           </div>
-        )}
       </div>
 
       {/* ── Dialogs ── */}
@@ -1075,6 +985,73 @@ export function LeadsShell({ leads: initialLeads, profiles }: Props) {
         open={addToEventLead !== null}
         onClose={() => setAddToEventLead(null)}
         onSuccess={(title) => { toast.success(`Added to ${title}`); setAddToEventLead(null); router.refresh() }}
+      />
+
+      {/* Bulk: add to event — uses first selected lead's dialog for now; opens multi-select */}
+      {bulkAddEventOpen && selected.size > 0 && (
+        <AddToEventDialog
+          leadId={Array.from(selected)[0]}
+          leadName={`${selected.size} leads`}
+          open={bulkAddEventOpen}
+          onClose={() => setBulkAddEventOpen(false)}
+          onSuccess={(title) => { toast.success(`Added ${selected.size} leads to ${title}`); setBulkAddEventOpen(false); setSelected(new Set()); router.refresh() }}
+          bulkLeadIds={Array.from(selected)}
+        />
+      )}
+
+      {bulkEmailOpen && (
+        <CampaignComposer
+          open={bulkEmailOpen}
+          onClose={() => setBulkEmailOpen(false)}
+          templates={emailTemplates}
+          events={emailEvents}
+          prefilledContactIds={bulkContactIds()}
+        />
+      )}
+
+      <Dialog open={bulkTagOpen} onOpenChange={(o) => { if (!o) setBulkTagOpen(false) }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add tag to {selected.size} leads</DialogTitle></DialogHeader>
+          <div className="space-y-1.5">
+            <Label>Tag</Label>
+            <Input value={bulkTagValue} onChange={(e) => setBulkTagValue(e.target.value)} placeholder="e.g. VIP, trial-2026" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleBulkTag() } }} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkTagOpen(false)}>Cancel</Button>
+            <Button onClick={handleBulkTag} className="bg-[#C9A227] hover:bg-[#b8911f] text-white">Add tag</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AddActivityDialog
+        open={activityLead !== null}
+        onClose={() => setActivityLead(null)}
+        onSave={() => { setActivityLead(null); router.refresh() }}
+        leadId={activityLead?.id}
+        contactId={activityLead?.contactId}
+        playerId={activityLead?.playerId}
+      />
+
+      <Dialog open={rowChangeStageLead !== null} onOpenChange={(o) => { if (!o) setRowChangeStageLead(null) }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Change stage</DialogTitle></DialogHeader>
+          <div className="space-y-1.5">
+            <Label>New stage</Label>
+            <select value={rowChangeStageValue} onChange={(e) => setRowChangeStageValue(e.target.value as LeadStage)} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C9A227]">
+              {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRowChangeStageLead(null)}>Cancel</Button>
+            <Button onClick={handleRowChangeStage} className="bg-[#C9A227] hover:bg-[#b8911f] text-white">Update</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <LeadDrawer
+        lead={drawerLead}
+        onClose={() => setDrawerLead(null)}
+        onUpdate={() => router.refresh()}
       />
     </div>
   )

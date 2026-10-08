@@ -5,7 +5,10 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Search, Plus, Archive, Tag, Mail } from "lucide-react"
+import {
+  Search, Plus, Archive, Tag, Mail, ExternalLink, Phone, MessageSquare,
+  StickyNote, MessageCircle, User,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -25,6 +28,9 @@ import {
 } from "@/app/(app)/contacts/actions"
 import { createPlayerWithParent } from "@/app/(app)/players/actions"
 import { CampaignComposer } from "@/components/email/CampaignComposer"
+import { AddActivityDialog } from "@/components/shared/AddActivityDialog"
+import { RowMenu } from "@/components/shared/RowMenu"
+import { ContactDrawer } from "./ContactDrawer"
 import type { Tables, Database, TablesInsert } from "@/lib/database.types"
 import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 
@@ -60,6 +66,9 @@ export function ContactsShell({
   const [addPlayerContactId, setAddPlayerContactId] = useState<string | null>(null)
   const [addPlayerForm, setAddPlayerForm] = useState({ first_name: "", last_name: "", birth_year: "" })
   const [savingPlayer, setSavingPlayer] = useState(false)
+  const [activityContact, setActivityContact] = useState<{ id: string } | null>(null)
+  const [rowEmailContactId, setRowEmailContactId] = useState<string | null>(null)
+  const [drawerContact, setDrawerContact] = useState<ContactWithPlayers | null>(null)
 
   const [newForm, setNewForm] = useState<Partial<TablesInsert<"contacts">>>({
     marketing_consent: "none",
@@ -104,11 +113,29 @@ export function ContactsShell({
   }
 
   function toggleSelectAll() {
-    if (selected.size === paginated.length) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(paginated.map((c) => c.id)))
-    }
+    const pageIds = paginated.map((c) => c.id)
+    const allPageSelected = pageIds.every((id) => selected.has(id))
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allPageSelected) pageIds.forEach((id) => next.delete(id))
+      else pageIds.forEach((id) => next.add(id))
+      return next
+    })
+  }
+
+  async function handleRowArchive(id: string, name: string) {
+    if (!confirm(`Archive ${name}?`)) return
+    await archiveContact(id)
+    toast.success("Contact archived")
+    router.refresh()
+  }
+
+  function waLink(phone: string | null | undefined): string | null {
+    if (!phone) return null
+    const digits = phone.replace(/\D/g, "")
+    if (digits.length < 8) return null
+    const e164 = digits.startsWith("0") ? `61${digits.slice(1)}` : digits
+    return `https://wa.me/${e164}`
   }
 
   async function handleBulkArchive() {
@@ -260,6 +287,18 @@ export function ContactsShell({
         </div>
       )}
 
+      {selected.size > 0 && selected.size === paginated.length && selected.size < filtered.length && (
+        <div className="text-center text-sm text-gray-600 bg-blue-50 rounded-lg py-2 px-4">
+          All {paginated.length} on this page selected.{" "}
+          <button
+            className="text-[#0C0F4C] font-medium hover:underline"
+            onClick={() => setSelected(new Set(filtered.map((c) => c.id)))}
+          >
+            Select all {filtered.length} contacts matching this filter
+          </button>
+        </div>
+      )}
+
       {bulkEmailOpen && (
         <CampaignComposer
           open={bulkEmailOpen}
@@ -270,6 +309,16 @@ export function ContactsShell({
         />
       )}
 
+      {rowEmailContactId && (
+        <CampaignComposer
+          open={rowEmailContactId !== null}
+          onClose={() => setRowEmailContactId(null)}
+          templates={emailTemplates}
+          events={emailEvents}
+          prefilledContactIds={[rowEmailContactId]}
+        />
+      )}
+
       <div className="rounded-lg border bg-white overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -277,7 +326,7 @@ export function ContactsShell({
               <th className="w-8 px-3 py-3">
                 <input
                   type="checkbox"
-                  checked={selected.size === paginated.length && paginated.length > 0}
+                  checked={paginated.length > 0 && paginated.every((c) => selected.has(c.id))}
                   onChange={toggleSelectAll}
                   className="rounded"
                 />
@@ -289,19 +338,20 @@ export function ContactsShell({
               <th className="px-3 py-3 font-medium text-gray-600 hidden lg:table-cell">Consent</th>
               <th className="px-3 py-3 font-medium text-gray-600 hidden xl:table-cell">Source</th>
               <th className="px-3 py-3 font-medium text-gray-600 hidden xl:table-cell">Added</th>
+              <th className="w-10 px-2 py-3" />
             </tr>
           </thead>
           <tbody className="divide-y">
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-gray-400">
+                <td colSpan={9} className="px-3 py-8 text-center text-gray-400">
                   No contacts found
                 </td>
               </tr>
             ) : (
               paginated.map((contact) => (
-                <tr key={contact.id} className="hover:bg-gray-50">
-                  <td className="px-3 py-3">
+                <tr key={contact.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDrawerContact(contact)}>
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={selected.has(contact.id)}
@@ -357,6 +407,18 @@ export function ContactsShell({
                   </td>
                   <td className="px-3 py-3 text-gray-400 text-xs hidden xl:table-cell">
                     {format(new Date(contact.created_at), "d MMM yyyy")}
+                  </td>
+                  <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                    <RowMenu items={[
+                      { label: "Open", icon: <ExternalLink className="h-4 w-4" />, onClick: () => router.push(`/contacts/${contact.id}`) },
+                      { label: "Send email", icon: <Mail className="h-4 w-4" />, onClick: () => setRowEmailContactId(contact.id) },
+                      { label: "Log call", icon: <Phone className="h-4 w-4" />, onClick: () => setActivityContact({ id: contact.id }) },
+                      { label: "Log SMS", icon: <MessageSquare className="h-4 w-4" />, onClick: () => setActivityContact({ id: contact.id }) },
+                      { label: "Add note", icon: <StickyNote className="h-4 w-4" />, onClick: () => setActivityContact({ id: contact.id }) },
+                      { label: "WhatsApp", icon: <MessageCircle className="h-4 w-4" />, onClick: () => { const url = waLink(contact.phone); if (url) window.open(url, "_blank"); else toast.error("No phone number on file") }, hidden: !contact.phone },
+                      { label: `View player${contact.player_contacts.length !== 1 ? "s" : ""}`, icon: <User className="h-4 w-4" />, onClick: () => router.push(`/contacts/${contact.id}`), hidden: contact.player_contacts.length === 0 },
+                      { label: "Archive", icon: <Archive className="h-4 w-4" />, onClick: () => handleRowArchive(contact.id, `${contact.first_name ?? ""} ${contact.last_name ?? ""}`.trim()), variant: "danger" },
+                    ]} />
                   </td>
                 </tr>
               ))
@@ -562,6 +624,19 @@ export function ContactsShell({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AddActivityDialog
+        open={activityContact !== null}
+        onClose={() => setActivityContact(null)}
+        onSave={() => { setActivityContact(null); router.refresh() }}
+        contactId={activityContact?.id}
+      />
+
+      <ContactDrawer
+        contact={drawerContact}
+        onClose={() => setDrawerContact(null)}
+        onUpdate={() => router.refresh()}
+      />
     </div>
   )
 }

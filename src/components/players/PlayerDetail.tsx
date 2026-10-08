@@ -30,6 +30,8 @@ import {
   type PlayerDetail as PlayerDetailType,
 } from "@/app/(app)/players/actions"
 import { completeTask, deleteTask } from "@/app/(app)/tasks/actions"
+import { OneOffEmailDialog } from "@/components/email/OneOffEmailDialog"
+import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 import {
   getPlayerDocuments,
   getDocumentSignedUrl,
@@ -71,7 +73,7 @@ function participantBadge(status: string): "success" | "warning" | "destructive"
   return "secondary"
 }
 
-export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) {
+export function PlayerDetail({ player: initial, templates = [] }: { player: PlayerDetailType; templates?: EmailTemplateRow[] }) {
   const router = useRouter()
   const [player] = useState(initial)
   const [activeTab, setActiveTab] = useState<Tab>("Profile")
@@ -99,6 +101,7 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
   const [addActivityOpen, setAddActivityOpen] = useState(false)
   const [addTaskOpen, setAddTaskOpen] = useState(false)
   const [linkGuardianOpen, setLinkGuardianOpen] = useState(false)
+  const [emailContact, setEmailContact] = useState<{ id: string; name: string; email: string | null; unsubscribed_at?: string | null } | null>(null)
   const [linkForm, setLinkForm] = useState({ contact_id: "", relationship: "parent", is_primary: false, is_emergency: false })
   const [playerDocs, setPlayerDocs] = useState<PlayerDocumentRow[] | null>(null)
   const fetchingDocsRef = useRef(false)
@@ -362,10 +365,13 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
                   </a>
                 )}
                 {c.email && (
-                  <a href={`mailto:${c.email}`} className="flex items-center gap-1 text-blue-600 hover:underline">
+                  <button
+                    onClick={() => setEmailContact({ id: pc.contact_id, name: `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim(), email: c.email, unsubscribed_at: c.unsubscribed_at })}
+                    className="flex items-center gap-1 text-blue-600 hover:underline text-sm"
+                  >
                     <Mail className="h-3.5 w-3.5" />
-                    {c.email}
-                  </a>
+                    Email
+                  </button>
                 )}
               </div>
             )
@@ -912,6 +918,20 @@ export function PlayerDetail({ player: initial }: { player: PlayerDetailType }) 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {emailContact && (
+        <OneOffEmailDialog
+          open={!!emailContact}
+          onClose={() => setEmailContact(null)}
+          contactId={emailContact.id}
+          contactName={emailContact.name}
+          contactEmail={emailContact.email}
+          contactUnsubscribedAt={emailContact.unsubscribed_at}
+          playerId={player.id}
+          templates={templates}
+          onSent={() => setEmailContact(null)}
+        />
+      )}
     </div>
   )
 }

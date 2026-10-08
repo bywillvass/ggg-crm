@@ -31,6 +31,7 @@ import {
   removeTagFromContact,
   type ContactDetail as ContactDetailType,
 } from "@/app/(app)/contacts/actions"
+import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 import { linkPlayerContact } from "@/app/(app)/players/actions"
 import { completeTask, deleteTask } from "@/app/(app)/tasks/actions"
 import type { Tables } from "@/lib/database.types"
@@ -41,9 +42,10 @@ type Tab = (typeof TABS)[number]
 
 type Props = {
   contact: ContactDetailType
+  templates?: EmailTemplateRow[]
 }
 
-export function ContactDetail({ contact: initial }: Props) {
+export function ContactDetail({ contact: initial, templates = [] }: Props) {
   const router = useRouter()
   const contact = initial
   const [activeTab, setActiveTab] = useState<Tab>("Overview")
@@ -514,6 +516,7 @@ export function ContactDetail({ contact: initial }: Props) {
         playerId={
           (contact.player_contacts?.find((pc) => pc.is_primary) ?? contact.player_contacts?.[0])?.player_id ?? undefined
         }
+        templates={templates}
         onSent={() => router.refresh()}
       />
 

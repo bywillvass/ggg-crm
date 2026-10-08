@@ -32,6 +32,7 @@ import {
 } from "@/app/(app)/events/actions"
 import { bulkAddLeadsToEvent } from "@/app/(app)/leads/actions"
 import { CampaignComposer } from "@/components/email/CampaignComposer"
+import { OneOffEmailDialog } from "@/components/email/OneOffEmailDialog"
 import { RowMenu } from "@/components/shared/RowMenu"
 import { useRouter } from "next/navigation"
 import type { EmailTemplateRow } from "@/app/(app)/email/actions"
@@ -120,6 +121,8 @@ export function EventParticipantsTab({
 
   // Remove confirm
   const [removeId, setRemoveId] = useState<string | null>(null)
+  // Per-participant email
+  const [emailParticipant, setEmailParticipant] = useState<ParticipantRow | null>(null)
 
   const participants = event.participants
 
@@ -532,6 +535,7 @@ export function EventParticipantsTab({
                         <RowMenu items={[
                           { label: "View player", icon: <User className="h-4 w-4" />, onClick: () => router.push(`/players/${p.player_id}`), hidden: !p.player_id },
                           { label: "View parent", icon: <Users className="h-4 w-4" />, onClick: () => { const c = primaryContact(p); if (c?.id) router.push(`/contacts/${c.id}`) }, hidden: !primaryContact(p)?.id },
+                          { label: "Send email", icon: <Mail className="h-4 w-4" />, onClick: () => setEmailParticipant(p), hidden: !primaryContact(p)?.email },
                           { label: "WhatsApp", icon: <MessageCircle className="h-4 w-4" />, onClick: () => { const url = waLink(primaryContact(p)?.phone); if (url) window.open(url, "_blank") }, hidden: !waLink(primaryContact(p)?.phone) },
                           { label: "Remove", icon: <Trash2 className="h-4 w-4" />, onClick: () => setRemoveId(p.id), variant: "danger" },
                         ]} />
@@ -802,6 +806,25 @@ export function EventParticipantsTab({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {emailParticipant && (() => {
+        const c = primaryContact(emailParticipant)
+        if (!c) return null
+        return (
+          <OneOffEmailDialog
+            open={!!emailParticipant}
+            onClose={() => setEmailParticipant(null)}
+            contactId={c.id}
+            contactName={`${c.first_name ?? ""} ${c.last_name ?? ""}`.trim()}
+            contactEmail={c.email ?? null}
+            contactUnsubscribedAt={c.unsubscribed_at}
+            playerId={emailParticipant.player_id ?? undefined}
+            eventId={event.id}
+            templates={emailTemplates}
+            onSent={() => setEmailParticipant(null)}
+          />
+        )
+      })()}
     </div>
   )
 }

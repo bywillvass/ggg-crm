@@ -128,6 +128,11 @@ export function CampaignComposer({
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const bodyTextRef = useRef<HTMLTextAreaElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const builderEyebrowRef = useRef<HTMLInputElement | null>(null)
+  const builderHeadingRef = useRef<HTMLInputElement | null>(null)
+  const builderSubheadingRef = useRef<HTMLInputElement | null>(null)
+  const builderBodyRef = useRef<HTMLTextAreaElement | null>(null)
+  const activeBuilderRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
 
   // Builder fields — restore from body_text JSON prefix if editing
   const [builderEyebrow, setBuilderEyebrow] = useState(() => {
@@ -239,7 +244,22 @@ export function CampaignComposer({
         setBodyText((prev) => prev + token)
       }
     } else if (format === "builder") {
-      setBuilderBody((prev: string) => prev + token)
+      const el = activeBuilderRef.current ?? builderBodyRef.current
+      if (el) {
+        const start = el.selectionStart ?? el.value.length
+        const end = el.selectionEnd ?? el.value.length
+        const next = el.value.slice(0, start) + token + el.value.slice(end)
+        if (el === builderEyebrowRef.current) setBuilderEyebrow(next)
+        else if (el === builderHeadingRef.current) setBuilderHeading(next)
+        else if (el === builderSubheadingRef.current) setBuilderSubheading(next)
+        else setBuilderBody(next)
+        setTimeout(() => {
+          el.focus()
+          el.setSelectionRange(start + token.length, start + token.length)
+        }, 0)
+      } else {
+        setBuilderBody((prev: string) => prev + token)
+      }
     } else {
       setBodyHtml((prev) => prev + token)
     }
@@ -691,39 +711,47 @@ export function CampaignComposer({
                 {format === "builder" && (
                   <div className="space-y-3 rounded-lg border bg-gray-50 p-4">
                     <p className="text-xs text-gray-500">
-                      Builds a branded Ginga Global Group email. Supports merge fields like {`{{contact_first_name}}`}.
+                      Builds a branded Ginga Global Group email. Click a field, then click a merge tag above to insert it.
                     </p>
                     <div className="space-y-1">
                       <Label>Eyebrow <span className="text-gray-400 font-normal">(optional — small label above heading)</span></Label>
                       <Input
+                        ref={builderEyebrowRef}
                         value={builderEyebrow}
                         onChange={(e) => setBuilderEyebrow(e.target.value)}
                         placeholder="e.g. Trial reminder"
+                        onFocus={() => { activeBuilderRef.current = builderEyebrowRef.current }}
                       />
                     </div>
                     <div className="space-y-1">
                       <Label>Heading <span className="text-gray-400 font-normal">(required)</span></Label>
                       <Input
+                        ref={builderHeadingRef}
                         value={builderHeading}
                         onChange={(e) => setBuilderHeading(e.target.value)}
                         placeholder="e.g. Your trial is coming up!"
+                        onFocus={() => { activeBuilderRef.current = builderHeadingRef.current }}
                       />
                     </div>
                     <div className="space-y-1">
                       <Label>Subheading <span className="text-gray-400 font-normal">(optional)</span></Label>
                       <Input
+                        ref={builderSubheadingRef}
                         value={builderSubheading}
                         onChange={(e) => setBuilderSubheading(e.target.value)}
                         placeholder="e.g. Here are the details for your upcoming session"
+                        onFocus={() => { activeBuilderRef.current = builderSubheadingRef.current }}
                       />
                     </div>
                     <div className="space-y-1">
                       <Label>Body <span className="text-gray-400 font-normal">(required — blank line = new paragraph)</span></Label>
                       <Textarea
+                        ref={builderBodyRef}
                         value={builderBody}
                         onChange={(e) => setBuilderBody(e.target.value)}
                         rows={12}
                         placeholder={`Hi {{contact_first_name}},\n\nWe're excited to have you join us...\n\nSee you on the pitch!`}
+                        onFocus={() => { activeBuilderRef.current = builderBodyRef.current }}
                       />
                     </div>
                   </div>

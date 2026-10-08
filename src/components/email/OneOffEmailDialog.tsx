@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { toast } from "sonner"
 import { AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -22,6 +22,13 @@ import { buildStructuredEmail } from "@/lib/email/builder"
 import { FROM_ADDRESSES, DEFAULT_FROM } from "@/lib/email/from-options"
 
 type BodyMode = "text" | "html" | "builder"
+
+const MERGE_FIELDS = [
+  "contact_first_name",
+  "player_first_name",
+  "event_title",
+  "event_date",
+]
 
 export function OneOffEmailDialog({
   open,
@@ -68,6 +75,34 @@ export function OneOffEmailDialog({
   const [builderHeading, setBuilderHeading] = useState("")
   const [builderSubheading, setBuilderSubheading] = useState("")
   const [builderBody, setBuilderBody] = useState("")
+
+  // Refs for merge-field insertion
+  const subjectRef = useRef<HTMLInputElement | null>(null)
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null)
+  const builderEyebrowRef = useRef<HTMLInputElement | null>(null)
+  const builderHeadingRef = useRef<HTMLInputElement | null>(null)
+  const builderSubheadingRef = useRef<HTMLInputElement | null>(null)
+  const builderBodyRef = useRef<HTMLTextAreaElement | null>(null)
+  const activeRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+
+  function insertMergeField(field: string) {
+    const token = `{{${field}}}`
+    const el = activeRef.current
+    if (!el) return
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? el.value.length
+    const next = el.value.slice(0, start) + token + el.value.slice(end)
+    if (el === subjectRef.current) setSubject(next)
+    else if (el === bodyRef.current) setBody(next)
+    else if (el === builderEyebrowRef.current) setBuilderEyebrow(next)
+    else if (el === builderHeadingRef.current) setBuilderHeading(next)
+    else if (el === builderSubheadingRef.current) setBuilderSubheading(next)
+    else if (el === builderBodyRef.current) setBuilderBody(next)
+    setTimeout(() => {
+      el.focus()
+      el.setSelectionRange(start + token.length, start + token.length)
+    }, 0)
+  }
 
   function applyTemplate(t: EmailTemplateRow) {
     setSubject(t.subject ?? "")
@@ -135,8 +170,6 @@ export function OneOffEmailDialog({
     }
   }
 
-  const MERGE_HINT = `Merge fields: {{contact_first_name}}, {{player_first_name}}, {{event_title}}, {{event_date}}`
-
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-2xl">
@@ -199,7 +232,26 @@ export function OneOffEmailDialog({
 
           <div className="space-y-1">
             <Label>Subject</Label>
-            <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
+            <Input
+              ref={subjectRef}
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              onFocus={() => { activeRef.current = subjectRef.current }}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-gray-400">Insert:</span>
+            {MERGE_FIELDS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => insertMergeField(f)}
+                className="text-xs rounded-md bg-gray-100 hover:bg-[#0C0F4C] hover:text-white px-2 py-0.5 text-gray-700 transition-colors"
+              >
+                {`{{${f}}}`}
+              </button>
+            ))}
           </div>
 
           <div className="space-y-1">
@@ -241,65 +293,73 @@ export function OneOffEmailDialog({
 
             {mode === "text" && (
               <Textarea
+                ref={bodyRef}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 rows={8}
                 placeholder="Write your message…"
+                onFocus={() => { activeRef.current = bodyRef.current }}
               />
             )}
 
             {mode === "html" && (
-              <>
-                <Textarea
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  rows={14}
-                  className="font-mono text-xs"
-                  placeholder="Paste your HTML email here…"
-                />
-                <p className="text-xs text-gray-400 mt-1">{MERGE_HINT}</p>
-              </>
+              <Textarea
+                ref={bodyRef}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={14}
+                className="font-mono text-xs"
+                placeholder="Paste your HTML email here…"
+                onFocus={() => { activeRef.current = bodyRef.current }}
+              />
             )}
 
             {mode === "builder" && (
               <div className="space-y-3 rounded-lg border bg-gray-50 p-4">
                 <p className="text-xs text-gray-500">
-                  Builds a branded Ginga Global Group email. Supports merge fields like {`{{contact_first_name}}`}.
+                  Builds a branded Ginga Global Group email. Click a field, then click a merge tag to insert it.
                 </p>
                 <div className="space-y-1">
                   <Label>Eyebrow <span className="text-gray-400 font-normal">(optional — small label above heading)</span></Label>
                   <Input
+                    ref={builderEyebrowRef}
                     value={builderEyebrow}
                     onChange={(e) => setBuilderEyebrow(e.target.value)}
                     placeholder="e.g. Trial reminder"
+                    onFocus={() => { activeRef.current = builderEyebrowRef.current }}
                   />
                 </div>
                 <div className="space-y-1">
                   <Label>Heading <span className="text-gray-400 font-normal">(required)</span></Label>
                   <Input
+                    ref={builderHeadingRef}
                     value={builderHeading}
                     onChange={(e) => setBuilderHeading(e.target.value)}
                     placeholder="e.g. Your trial is coming up!"
+                    onFocus={() => { activeRef.current = builderHeadingRef.current }}
                   />
                 </div>
                 <div className="space-y-1">
                   <Label>Subheading <span className="text-gray-400 font-normal">(optional)</span></Label>
                   <Input
+                    ref={builderSubheadingRef}
                     value={builderSubheading}
                     onChange={(e) => setBuilderSubheading(e.target.value)}
                     placeholder="e.g. Here are the details for your upcoming session"
+                    onFocus={() => { activeRef.current = builderSubheadingRef.current }}
                   />
                 </div>
                 <div className="space-y-1">
                   <Label>Body <span className="text-gray-400 font-normal">(required — blank line = new paragraph)</span></Label>
                   <Textarea
+                    ref={builderBodyRef}
                     value={builderBody}
                     onChange={(e) => setBuilderBody(e.target.value)}
                     rows={8}
                     placeholder={`Hi {{contact_first_name}},\n\nWe're excited to have you join us...\n\nSee you on the pitch!`}
+                    onFocus={() => { activeRef.current = builderBodyRef.current }}
                   />
                 </div>
-                <p className="text-xs text-gray-400">{MERGE_HINT}</p>
               </div>
             )}
           </div>

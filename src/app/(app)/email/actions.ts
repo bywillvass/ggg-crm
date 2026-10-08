@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
 import { logActivity } from "@/lib/activity"
 import { processEmailQueue, sendSingleEmail, recalculateCampaignCounts } from "@/lib/email/sender"
+import { FROM_ADDRESSES } from "@/lib/email/from-options"
 import { resolveAudienceServer, type AudienceContact, type AudienceFilter } from "@/lib/email/audience"
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types"
 
@@ -439,6 +440,8 @@ export async function sendOneOffEmail(input: {
   eventId?: string | null
   playerId?: string | null
   invoiceId?: string | null
+  fromEmail?: string | null
+  replyTo?: string | null
 }): Promise<{ error: string | null }> {
   await requireAdmin()
   const user = await requireAuth()
@@ -469,7 +472,13 @@ export async function sendOneOffEmail(input: {
 
   if (!inserted) return { error: "Could not create message" }
 
-  const result = await sendSingleEmail(inserted.id)
+  const result = await sendSingleEmail(inserted.id, {
+    fromEmail: input.fromEmail ?? undefined,
+    fromName: input.fromEmail
+      ? FROM_ADDRESSES.find(f => f.value === input.fromEmail)?.name
+      : undefined,
+    replyTo: input.replyTo ?? undefined,
+  })
   if (!result.ok) return { error: result.error ?? "Failed to send" }
 
   await logActivity({

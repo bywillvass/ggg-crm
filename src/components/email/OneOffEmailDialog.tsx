@@ -18,8 +18,10 @@ import {
 import { cn } from "cn"
 import { sendOneOffEmail } from "@/app/(app)/email/actions"
 import type { EmailTemplateRow } from "@/app/(app)/email/actions"
+import { buildStructuredEmail } from "@/lib/email/builder"
+import { FROM_ADDRESSES, DEFAULT_FROM } from "@/lib/email/from-options"
 
-type BodyMode = "text" | "html"
+type BodyMode = "text" | "html" | "builder"
 
 export function OneOffEmailDialog({
   open,
@@ -57,6 +59,16 @@ export function OneOffEmailDialog({
   )
   const [sending, setSending] = useState(false)
 
+  // From / reply-to
+  const [fromEmail, setFromEmail] = useState<string>(DEFAULT_FROM)
+  const [replyTo, setReplyTo] = useState<string>("")
+
+  // Builder fields
+  const [builderEyebrow, setBuilderEyebrow] = useState("")
+  const [builderHeading, setBuilderHeading] = useState("")
+  const [builderSubheading, setBuilderSubheading] = useState("")
+  const [builderBody, setBuilderBody] = useState("")
+
   function applyTemplate(t: EmailTemplateRow) {
     setSubject(t.subject ?? "")
     const b = t.body_html ?? t.body_text ?? ""
@@ -67,15 +79,42 @@ export function OneOffEmailDialog({
   async function handleSend() {
     if (!subject.trim()) return toast.error("Subject is required")
     if (!contactEmail) return toast.error("Contact has no email")
+
+    if (mode === "builder") {
+      if (!builderHeading.trim()) return toast.error("Heading is required")
+      if (!builderBody.trim()) return toast.error("Body is required")
+    }
+
     setSending(true)
+
+    let bodyHtml: string | null = null
+    let bodyText: string | null = null
+
+    if (mode === "html") {
+      bodyHtml = body
+    } else if (mode === "text") {
+      bodyText = body
+    } else {
+      // builder mode — generate HTML
+      bodyHtml = buildStructuredEmail({
+        eyebrow: builderEyebrow.trim() || null,
+        heading: builderHeading.trim(),
+        subheading: builderSubheading.trim() || null,
+        body: builderBody,
+        unsubscribeUrl: "",
+      })
+    }
+
     const res = await sendOneOffEmail({
       contactId,
       subject: subject.trim(),
-      bodyHtml: mode === "html" ? body : null,
-      bodyText: mode === "text" ? body : null,
+      bodyHtml,
+      bodyText,
       eventId: eventId ?? null,
       playerId: playerId ?? null,
       invoiceId: invoiceId ?? null,
+      fromEmail: fromEmail || null,
+      replyTo: replyTo || null,
     })
     setSending(false)
     if (res.error) {
@@ -85,10 +124,18 @@ export function OneOffEmailDialog({
       setSubject("")
       setBody("")
       setMode("text")
+      setFromEmail(DEFAULT_FROM)
+      setReplyTo("")
+      setBuilderEyebrow("")
+      setBuilderHeading("")
+      setBuilderSubheading("")
+      setBuilderBody("")
       onSent?.()
       onClose()
     }
   }
+
+  const MERGE_HINT = `Merge fields: {{contact_first_name}}, {{player_first_name}}, {{event_title}}, {{event_date}}`
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
@@ -110,6 +157,27 @@ export function OneOffEmailDialog({
               </div>
             </div>
           )}
+
+          {/* From / Reply-to row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>From</Label>
+              <Select value={fromEmail} onChange={(e) => setFromEmail(e.target.value)}>
+                {FROM_ADDRESSES.map((f) => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Reply to</Label>
+              <Select value={replyTo} onChange={(e) => setReplyTo(e.target.value)}>
+                <option value="">Same as from</option>
+                {FROM_ADDRESSES.map((f) => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
 
           {templates.length > 0 && (
             <div className="space-y-1">
@@ -158,19 +226,81 @@ export function OneOffEmailDialog({
                 >
                   HTML
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("builder")}
+                  className={cn(
+                    "px-3 py-1 transition-colors border-l",
+                    mode === "builder" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                  )}
+                >
+                  Builder
+                </button>
               </div>
             </div>
-            <Textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={mode === "html" ? 14 : 8}
-              className={cn(mode === "html" && "font-mono text-xs")}
-              placeholder={mode === "html" ? "Paste your HTML email here…" : "Write your message…"}
-            />
+
+            {mode === "text" && (
+              <Textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={8}
+                placeholder="Write your message…"
+              />
+            )}
+
             {mode === "html" && (
-              <p className="text-xs text-gray-400 mt-1">
-                Merge fields: {"{{"} contact_first_name {"}}"}, {"{{"} player_first_name {"}}"}, {"{{"} event_title {"}}"}, {"{{"} event_date {"}}"}, {"{{"} event_time {"}}"}, {"{{"} event_venue {"}}"}
-              </p>
+              <>
+                <Textarea
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  rows={14}
+                  className="font-mono text-xs"
+                  placeholder="Paste your HTML email here…"
+                />
+                <p className="text-xs text-gray-400 mt-1">{MERGE_HINT}</p>
+              </>
+            )}
+
+            {mode === "builder" && (
+              <div className="space-y-3 rounded-lg border bg-gray-50 p-4">
+                <p className="text-xs text-gray-500">
+                  Builds a branded Ginga Global Group email. Supports merge fields like {`{{contact_first_name}}`}.
+                </p>
+                <div className="space-y-1">
+                  <Label>Eyebrow <span className="text-gray-400 font-normal">(optional — small label above heading)</span></Label>
+                  <Input
+                    value={builderEyebrow}
+                    onChange={(e) => setBuilderEyebrow(e.target.value)}
+                    placeholder="e.g. Trial reminder"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Heading <span className="text-gray-400 font-normal">(required)</span></Label>
+                  <Input
+                    value={builderHeading}
+                    onChange={(e) => setBuilderHeading(e.target.value)}
+                    placeholder="e.g. Your trial is coming up!"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Subheading <span className="text-gray-400 font-normal">(optional)</span></Label>
+                  <Input
+                    value={builderSubheading}
+                    onChange={(e) => setBuilderSubheading(e.target.value)}
+                    placeholder="e.g. Here are the details for your upcoming session"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Body <span className="text-gray-400 font-normal">(required — blank line = new paragraph)</span></Label>
+                  <Textarea
+                    value={builderBody}
+                    onChange={(e) => setBuilderBody(e.target.value)}
+                    rows={8}
+                    placeholder={`Hi {{contact_first_name}},\n\nWe're excited to have you join us...\n\nSee you on the pitch!`}
+                  />
+                </div>
+                <p className="text-xs text-gray-400">{MERGE_HINT}</p>
+              </div>
             )}
           </div>
         </div>

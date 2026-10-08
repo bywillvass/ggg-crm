@@ -37,6 +37,8 @@ import {
 } from "@/app/(app)/email/actions"
 import { cn } from "cn"
 import type { Tables, Database } from "@/lib/database.types"
+import { buildStructuredEmail } from "@/lib/email/builder"
+import { FROM_ADDRESSES } from "@/lib/email/from-options"
 
 type ParticipantStatus = Database["public"]["Enums"]["participant_status"]
 type ConsentType = Database["public"]["Enums"]["consent_type"]
@@ -107,8 +109,18 @@ export function CampaignComposer({
   const [name, setName] = useState(initialCampaign?.name ?? "")
   const [subject, setSubject] = useState(initialCampaign?.subject ?? "")
   const [preheader, setPreheader] = useState(initialCampaign?.preheader ?? "")
-  const [format, setFormat] = useState<"plain" | "html">((initialCampaign?.format as "plain" | "html") ?? "plain")
-  const [bodyText, setBodyText] = useState(initialCampaign?.body_text ?? "")
+  const [format, setFormat] = useState<"plain" | "html" | "builder">(() => {
+    const f = initialCampaign?.format as string | undefined
+    if (f === "plain" || f === "html" || f === "builder") return f
+    // Detect builder from body_text prefix
+    if (initialCampaign?.body_text?.startsWith("__builder__:")) return "builder"
+    return "plain"
+  })
+  const [bodyText, setBodyText] = useState(() => {
+    const bt = initialCampaign?.body_text ?? ""
+    if (bt.startsWith("__builder__:")) return ""
+    return bt
+  })
   const [bodyHtml, setBodyHtml] = useState(initialCampaign?.body_html ?? "")
   const [attachments, setAttachments] = useState<EmailAttachmentRow[]>(initialAttachments ?? [])
   const [includeRsvp, setIncludeRsvp] = useState(initialCampaign?.include_rsvp ?? false)
@@ -116,6 +128,40 @@ export function CampaignComposer({
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const bodyTextRef = useRef<HTMLTextAreaElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+
+  // Builder fields — restore from body_text JSON prefix if editing
+  const [builderEyebrow, setBuilderEyebrow] = useState(() => {
+    try {
+      const bt = initialCampaign?.body_text ?? ""
+      if (bt.startsWith("__builder__:")) return JSON.parse(bt.slice("__builder__:".length)).eyebrow ?? ""
+    } catch { /* ignore */ }
+    return ""
+  })
+  const [builderHeading, setBuilderHeading] = useState(() => {
+    try {
+      const bt = initialCampaign?.body_text ?? ""
+      if (bt.startsWith("__builder__:")) return JSON.parse(bt.slice("__builder__:".length)).heading ?? ""
+    } catch { /* ignore */ }
+    return ""
+  })
+  const [builderSubheading, setBuilderSubheading] = useState(() => {
+    try {
+      const bt = initialCampaign?.body_text ?? ""
+      if (bt.startsWith("__builder__:")) return JSON.parse(bt.slice("__builder__:".length)).subheading ?? ""
+    } catch { /* ignore */ }
+    return ""
+  })
+  const [builderBody, setBuilderBody] = useState(() => {
+    try {
+      const bt = initialCampaign?.body_text ?? ""
+      if (bt.startsWith("__builder__:")) return JSON.parse(bt.slice("__builder__:".length)).body ?? ""
+    } catch { /* ignore */ }
+    return ""
+  })
+
+  // From / reply-to (from_name column stores the chosen email address for campaigns)
+  const [fromName, setFromName] = useState(initialCampaign?.from_name ?? "")
+  const [replyTo, setReplyTo] = useState(initialCampaign?.reply_to ?? "")
 
   // Step 3: Review / send
   const [scheduledAt, setScheduledAt] = useState("")
@@ -192,6 +238,8 @@ export function CampaignComposer({
       } else {
         setBodyText((prev) => prev + token)
       }
+    } else if (format === "builder") {
+      setBuilderBody((prev: string) => prev + token)
     } else {
       setBodyHtml((prev) => prev + token)
     }
@@ -201,7 +249,8 @@ export function CampaignComposer({
     const t = templates.find((x) => x.id === id)
     if (!t) return
     setSubject(t.subject)
-    setFormat(t.format as "plain" | "html")
+    const fmt = t.format as "plain" | "html" | "builder"
+    setFormat(fmt === "builder" ? "builder" : fmt === "html" ? "html" : "plain")
     setBodyText(t.body_text ?? "")
     setBodyHtml(t.body_html ?? "")
   }
@@ -217,16 +266,46 @@ export function CampaignComposer({
       return null
     }
 
+    // Builder: generate HTML and store raw fields in body_text for round-tripping
+    let savedBodyHtml: string | null = null
+    let savedBodyText: string | null = null
+    let savedFormat: "plain" | "html" = format === "plain" ? "plain" : "html"
+
+    if (format === "builder") {
+      savedBodyHtml = buildStructuredEmail({
+        eyebrow: builderEyebrow.trim() || null,
+        heading: builderHeading.trim(),
+        subheading: builderSubheading.trim() || null,
+        body: builderBody,
+        unsubscribeUrl: "",
+      })
+      savedBodyText = `__builder__:${JSON.stringify({
+        eyebrow: builderEyebrow,
+        heading: builderHeading,
+        subheading: builderSubheading,
+        body: builderBody,
+      })}`
+      savedFormat = "html" // store as html so the queue processor treats it as HTML
+    } else if (format === "html") {
+      savedBodyHtml = bodyHtml
+      savedBodyText = null
+    } else {
+      savedBodyHtml = null
+      savedBodyText = bodyText
+    }
+
     const payload = {
       name: name.trim(),
       subject: subject.trim(),
       preheader: preheader.trim() || null,
-      format,
-      body_html: format === "html" ? bodyHtml : null,
-      body_text: format === "plain" ? bodyText : null,
+      format: savedFormat,
+      body_html: savedBodyHtml,
+      body_text: savedBodyText,
       audience: audience as unknown as Tables<"email_campaigns">["audience"],
       event_id: sourceType === "event" ? eventId || null : null,
       include_rsvp: includeRsvp,
+      from_name: fromName || null,
+      reply_to: replyTo || null,
     }
 
     setSaving(true)
@@ -522,6 +601,28 @@ export function CampaignComposer({
                 </div>
               </div>
 
+              {/* From / Reply-to */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>From</Label>
+                  <Select value={fromName} onChange={(e) => setFromName(e.target.value)}>
+                    <option value="">Default (settings)</option>
+                    {FROM_ADDRESSES.map((f) => (
+                      <option key={f.value} value={f.value}>{f.label}</option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Reply to</Label>
+                  <Select value={replyTo} onChange={(e) => setReplyTo(e.target.value)}>
+                    <option value="">Same as from</option>
+                    {FROM_ADDRESSES.map((f) => (
+                      <option key={f.value} value={f.value}>{f.label}</option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Format</Label>
@@ -540,11 +641,21 @@ export function CampaignComposer({
                       type="button"
                       onClick={() => setFormat("html")}
                       className={cn(
-                        "px-3 py-1 text-xs font-medium",
+                        "px-3 py-1 text-xs font-medium border-l",
                         format === "html" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600"
                       )}
                     >
                       HTML
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormat("builder")}
+                      className={cn(
+                        "px-3 py-1 text-xs font-medium border-l",
+                        format === "builder" ? "bg-[#0C0F4C] text-white" : "bg-white text-gray-600"
+                      )}
+                    >
+                      Builder
                     </button>
                   </div>
                 </div>
@@ -563,7 +674,7 @@ export function CampaignComposer({
                   ))}
                 </div>
 
-                {format === "plain" ? (
+                {format === "plain" && (
                   <Textarea
                     ref={bodyTextRef}
                     value={bodyText}
@@ -571,8 +682,51 @@ export function CampaignComposer({
                     rows={14}
                     placeholder="Hi {{contact_first_name}},..."
                   />
-                ) : (
+                )}
+
+                {format === "html" && (
                   <TiptapEditor value={bodyHtml} onChange={setBodyHtml} />
+                )}
+
+                {format === "builder" && (
+                  <div className="space-y-3 rounded-lg border bg-gray-50 p-4">
+                    <p className="text-xs text-gray-500">
+                      Builds a branded Ginga Global Group email. Supports merge fields like {`{{contact_first_name}}`}.
+                    </p>
+                    <div className="space-y-1">
+                      <Label>Eyebrow <span className="text-gray-400 font-normal">(optional — small label above heading)</span></Label>
+                      <Input
+                        value={builderEyebrow}
+                        onChange={(e) => setBuilderEyebrow(e.target.value)}
+                        placeholder="e.g. Trial reminder"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Heading <span className="text-gray-400 font-normal">(required)</span></Label>
+                      <Input
+                        value={builderHeading}
+                        onChange={(e) => setBuilderHeading(e.target.value)}
+                        placeholder="e.g. Your trial is coming up!"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Subheading <span className="text-gray-400 font-normal">(optional)</span></Label>
+                      <Input
+                        value={builderSubheading}
+                        onChange={(e) => setBuilderSubheading(e.target.value)}
+                        placeholder="e.g. Here are the details for your upcoming session"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Body <span className="text-gray-400 font-normal">(required — blank line = new paragraph)</span></Label>
+                      <Textarea
+                        value={builderBody}
+                        onChange={(e) => setBuilderBody(e.target.value)}
+                        rows={12}
+                        placeholder={`Hi {{contact_first_name}},\n\nWe're excited to have you join us...\n\nSee you on the pitch!`}
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -660,6 +814,13 @@ export function CampaignComposer({
                 <div className="p-4 text-sm max-h-[280px] overflow-y-auto">
                   {format === "html" ? (
                     <div dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+                  ) : format === "builder" ? (
+                    <div className="space-y-1 text-sm">
+                      {builderEyebrow && <p className="text-xs font-semibold tracking-widest text-[#C9A227] uppercase">{builderEyebrow}</p>}
+                      <p className="text-xl font-bold text-[#0C0F4C]">{builderHeading || <span className="text-gray-400">No heading</span>}</p>
+                      {builderSubheading && <p className="text-base text-gray-600">{builderSubheading}</p>}
+                      <div className="mt-2 text-gray-700 whitespace-pre-wrap">{builderBody}</div>
+                    </div>
                   ) : (
                     <pre className="whitespace-pre-wrap font-sans">{bodyText}</pre>
                   )}

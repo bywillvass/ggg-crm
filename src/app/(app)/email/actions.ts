@@ -579,25 +579,29 @@ export type EmailPlayerOption = {
   name: string
   parentName: string | null
   parentEmail: string | null
+  // Shown when there's no email so the player can still be reached by phone
+  parentPhone: string | null
 }
 
 function toEmailPlayerOption(p: {
   id: string
   first_name: string | null
   last_name: string | null
-  player_contacts: { is_primary: boolean; contacts: { first_name: string | null; last_name: string | null; email: string | null } | null }[]
+  player_contacts: { is_primary: boolean; contacts: { first_name: string | null; last_name: string | null; email: string | null; phone: string | null } | null }[]
 }): EmailPlayerOption {
   const links = p.player_contacts ?? []
-  const parent = (links.find((pc) => pc.is_primary) ?? links[0])?.contacts ?? null
+  const withEmail = links.filter((pc) => pc.contacts?.email)
+  const parent = (withEmail.find((pc) => pc.is_primary) ?? withEmail[0] ?? links.find((pc) => pc.is_primary) ?? links[0])?.contacts ?? null
   return {
     id: p.id,
     name: [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unnamed player",
     parentName: parent ? [parent.first_name, parent.last_name].filter(Boolean).join(" ") || null : null,
     parentEmail: parent?.email ?? null,
+    parentPhone: parent?.phone ?? links.find((pc) => pc.contacts?.phone)?.contacts?.phone ?? null,
   }
 }
 
-const EMAIL_PLAYER_SELECT = "id, first_name, last_name, player_contacts(is_primary, contacts(first_name, last_name, email))"
+const EMAIL_PLAYER_SELECT = "id, first_name, last_name, player_contacts(is_primary, contacts(first_name, last_name, email, phone))"
 
 export async function searchPlayersForEmail(query: string): Promise<EmailPlayerOption[]> {
   await requireAdmin()

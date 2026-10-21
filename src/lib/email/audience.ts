@@ -121,7 +121,10 @@ export async function resolveAudienceServer(
     const byPlayer = new Map<string, AudienceContact>()
     for (const row of data ?? []) {
       const r = row as unknown as { player_id: string; contacts: (AudienceContact & { archived_at: string | null }) | null }
-      if (!r.contacts || r.contacts.archived_at || byPlayer.has(r.player_id)) continue
+      if (!r.contacts || r.contacts.archived_at) continue
+      // Rows are primary-first; a later contact only wins if the current pick has no email
+      const current = byPlayer.get(r.player_id)
+      if (current && (current.email || !r.contacts.email)) continue
       const c = r.contacts
       byPlayer.set(r.player_id, {
         id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email,

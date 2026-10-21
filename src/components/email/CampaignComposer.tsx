@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { formatInTimeZone } from "date-fns-tz"
-import { Upload, X, FileText, Plus, Search } from "lucide-react"
+import { Upload, X, FileText, Plus, Search, Phone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -650,7 +650,9 @@ export function CampaignComposer({
                                 <div className={cn("text-xs truncate", p.parentEmail ? "text-gray-500" : "text-amber-600")}>
                                   {p.parentEmail
                                     ? `${p.parentName ?? "Parent"} · ${p.parentEmail}`
-                                    : "No parent email on file"}
+                                    : p.parentPhone
+                                      ? `No email · ${p.parentName ?? "Parent"} · ${p.parentPhone}`
+                                      : "No email or phone on file"}
                                 </div>
                               </div>
                               <Button
@@ -685,7 +687,7 @@ export function CampaignComposer({
                               "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs",
                               p.parentEmail ? "bg-white text-gray-800" : "bg-amber-50 text-amber-800 border-amber-200"
                             )}
-                            title={p.parentEmail ? `${p.parentName ?? "Parent"} · ${p.parentEmail}` : "No parent email - will be skipped"}
+                            title={p.parentEmail ? `${p.parentName ?? "Parent"} · ${p.parentEmail}` : "No email - won't receive this, contact by phone"}
                           >
                             {p.name}
                             <button type="button" onClick={() => removePlayer(p.id)} className="text-gray-400 hover:text-gray-700" aria-label={`Remove ${p.name}`}>
@@ -694,6 +696,29 @@ export function CampaignComposer({
                           </span>
                         ))}
                       </div>
+                      {selectedPlayers.some((p) => !p.parentEmail) && (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                          <div className="font-medium text-amber-900 mb-1.5">No email - contact by phone instead</div>
+                          <ul className="space-y-1">
+                            {selectedPlayers.filter((p) => !p.parentEmail).map((p) => (
+                              <li key={p.id} className="flex items-center justify-between gap-3 text-amber-900">
+                                <span className="truncate">
+                                  {p.name}
+                                  {p.parentName && <span className="text-amber-700"> · {p.parentName}</span>}
+                                </span>
+                                {p.parentPhone ? (
+                                  <a href={`tel:${p.parentPhone.replace(/\s+/g, "")}`} className="inline-flex items-center gap-1 shrink-0 font-medium hover:underline">
+                                    <Phone className="h-3.5 w-3.5" />
+                                    {p.parentPhone}
+                                  </a>
+                                ) : (
+                                  <span className="shrink-0 text-amber-700">No phone either</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

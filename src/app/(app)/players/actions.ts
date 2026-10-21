@@ -1,7 +1,8 @@
 "use server"
 
 import { unstable_cache, updateTag } from "next/cache"
-import { requireAdmin } from "@/lib/auth/role"
+import { requireAdmin, getAuthUser } from "@/lib/auth/role"
+import { mergePlayersCore, type MergeResult } from "@/lib/players/merge"
 import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types"
@@ -243,4 +244,64 @@ export async function createPlayerWithParent(
   updateTag("players")
   updateTag("contacts")
   return { data: player, error: null }
+}
+
+// ─── Merge duplicates ─────────────────────────────────────────────────────────
+
+export type PlayerMergeOption = {
+  id: string
+  name: string
+  dob: string | null
+  club: string | null
+  createdAt: string
+  eventCount: number
+  parents: { name: string; email: string | null; phone: string | null }[]
+}
+
+export async function searchPlayersForMerge(excludeId: string, query: string): Promise<PlayerMergeOption[]> {
+  await requireAdmin()
+  const q = query.replace(/[%,()*]/g, " ").trim()
+  if (q.length < 2) return []
+  const parts = q.split(/\s+/)
+  let req = serviceClient
+    .from("players")
+    .select("id, first_name, last_name, dob, current_club, created_at, player_contacts(is_primary, contacts(first_name, last_name, email, phone)), event_participants(id)")
+    .is("archived_at", null)
+    .neq("id", excludeId)
+  // Match on first name or last name, or both when a full name is typed
+  req = parts.length > 1
+    ? req.ilike("first_name", `%${parts[0]}%`).ilike("last_name", `%${parts.slice(1).join(" ")}%`)
+    : req.or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+  const { data } = await req.order("first_name").limit(15)
+  return (data ?? []).map((p) => ({
+    id: p.id,
+    name: [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unnamed player",
+    dob: p.dob,
+    club: p.current_club,
+    createdAt: p.created_at,
+    eventCount: p.event_participants?.length ?? 0,
+    parents: (p.player_contacts ?? [])
+      .slice()
+      .sort((a, b) => Number(b.is_primary) - Number(a.is_primary))
+      .flatMap((pc) => pc.contacts ? [{
+        name: [pc.contacts.first_name, pc.contacts.last_name].filter(Boolean).join(" ") || "Unnamed",
+        email: pc.contacts.email,
+        phone: pc.contacts.phone,
+      }] : []),
+  }))
+}
+
+export async function mergePlayers(
+  keepId: string,
+  duplicateId: string
+): Promise<{ error: string | null; result?: MergeResult }> {
+  await requireAdmin()
+  const user = await getAuthUser()
+  try {
+    const result = await mergePlayersCore(serviceClient, keepId, duplicateId, user?.id ?? null)
+    for (const tag of ["players", "contacts", "leads", "events", "invoices", "assessments", "tasks"]) updateTag(tag)
+    return { error: null, result }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Merge failed" }
+  }
 }

@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Phone, Mail, Archive, Edit2, Check, UserPlus, Eye, Trash2, FileText, Download } from "lucide-react"
+import { Phone, Mail, Archive, Edit2, Check, UserPlus, Eye, Trash2, FileText, Download, Merge } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -39,6 +39,7 @@ import {
   type PlayerDocumentRow,
 } from "@/app/(app)/documents/actions"
 import { DocumentViewer } from "@/components/shared/DocumentViewer"
+import { MergePlayerDialog } from "@/components/players/MergePlayerDialog"
 import { Select } from "@/components/ui/select"
 import { cn } from "cn"
 import type { Database } from "@/lib/database.types"
@@ -101,6 +102,7 @@ export function PlayerDetail({ player: initial, templates = [] }: { player: Play
   const [addActivityOpen, setAddActivityOpen] = useState(false)
   const [addTaskOpen, setAddTaskOpen] = useState(false)
   const [linkGuardianOpen, setLinkGuardianOpen] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
   const [emailContact, setEmailContact] = useState<{ id: string; name: string; email: string | null; unsubscribed_at?: string | null } | null>(null)
   const [linkForm, setLinkForm] = useState({ contact_id: "", relationship: "parent", is_primary: false, is_emergency: false })
   const [playerDocs, setPlayerDocs] = useState<PlayerDocumentRow[] | null>(null)
@@ -325,6 +327,10 @@ export function PlayerDetail({ player: initial, templates = [] }: { player: Play
           <Button variant="outline" size="sm" onClick={() => setEditing(!editing)}>
             <Edit2 className="h-3.5 w-3.5 mr-1.5" />
             Edit
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setMergeOpen(true)}>
+            <Merge className="h-3.5 w-3.5 mr-1.5" />
+            Merge duplicate
           </Button>
           <Button
             variant="outline"
@@ -918,6 +924,8 @@ export function PlayerDetail({ player: initial, templates = [] }: { player: Play
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MergePlayerDialog open={mergeOpen} onClose={() => setMergeOpen(false)} player={player} />
 
       {emailContact && (
         <OneOffEmailDialog

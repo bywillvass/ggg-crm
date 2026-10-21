@@ -25,9 +25,10 @@ function isAudienceFilter(x: unknown): x is AudienceFilter {
   return !!x && typeof x === "object" && "type" in (x as Record<string, unknown>)
 }
 
+// Fills player_id from player_contacts for contacts that don't already have one
 async function attachPrimaryPlayers(contacts: AudienceContact[]): Promise<AudienceContact[]> {
-  if (contacts.length === 0) return contacts
-  const ids = contacts.map((c) => c.id)
+  const ids = contacts.filter((c) => !c.player_id).map((c) => c.id)
+  if (ids.length === 0) return contacts
   // Fetch all player_contacts, primary first; take first match per contact
   const { data } = await serviceClient
     .from("player_contacts")
@@ -38,7 +39,7 @@ async function attachPrimaryPlayers(contacts: AudienceContact[]): Promise<Audien
   for (const r of data ?? []) {
     if (!map.has(r.contact_id)) map.set(r.contact_id, r.player_id)
   }
-  return contacts.map((c) => ({ ...c, player_id: map.get(c.id) ?? null }))
+  return contacts.map((c) => ({ ...c, player_id: c.player_id ?? map.get(c.id) ?? null }))
 }
 
 export async function resolveAudienceServer(
@@ -103,7 +104,7 @@ export async function resolveAudienceServer(
         uniq.set(r.contacts.id, { ...r.contacts, player_id: r.player_id ?? null })
       }
     }
-    candidates = Array.from(uniq.values())
+    candidates = await attachPrimaryPlayers(Array.from(uniq.values()))
   } else if (audience.type === "event") {
     const filters = audience.filters ?? {}
     if (!filters.event_id) return { contacts: [], skipped: 0, total: 0 }
@@ -148,7 +149,7 @@ export async function resolveAudienceServer(
         }
       }
     }
-    candidates = Array.from(uniq.values())
+    candidates = await attachPrimaryPlayers(Array.from(uniq.values()))
   }
 
   const total = candidates.length

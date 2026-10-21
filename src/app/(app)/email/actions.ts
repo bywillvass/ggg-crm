@@ -301,15 +301,29 @@ export async function sendTestEmail(
 
   if (!contactId) return { error: "Could not resolve test contact" }
 
+  // Preview merge fields with a real recipient from the audience (prefer one
+  // with a linked player) so the test shows actual parent + player names.
+  // Contact fields are merged here rather than by swapping contact_id, so the
+  // test's unsubscribe link still belongs to the tester, not the sample parent.
+  const { contacts: audienceContacts } = await resolveAudienceServer(campaign.audience as unknown)
+  const sample = audienceContacts.find((c) => c.player_id) ?? audienceContacts[0] ?? null
+  const mergeSampleContact = (text: string | null) =>
+    sample && text
+      ? text
+          .replace(/\{\{\s*contact_first_name\s*\}\}/g, sample.first_name ?? "there")
+          .replace(/\{\{\s*contact_last_name\s*\}\}/g, sample.last_name ?? "")
+      : text
+
   const { data: inserted } = await serviceClient
     .from("email_messages")
     .insert({
       contact_id: contactId,
       to_email: toEmail,
-      subject: `[TEST] ${campaign.subject}`,
-      body_html: campaign.body_html,
-      body_text: campaign.body_text,
+      subject: `[TEST] ${mergeSampleContact(campaign.subject)}`,
+      body_html: mergeSampleContact(campaign.body_html),
+      body_text: mergeSampleContact(campaign.body_text),
       event_id: campaign.event_id,
+      player_id: sample?.player_id ?? null,
       status: "queued",
     })
     .select("id")

@@ -52,6 +52,7 @@ async function handler(request: NextRequest) {
         body_text: campaign.body_text,
         campaign_id: campaign.id,
         event_id: campaign.event_id,
+        player_id: contact.player_id ?? null,
         status: "queued",
       })
       queued++

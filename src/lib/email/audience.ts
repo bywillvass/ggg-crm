@@ -9,7 +9,7 @@ export type AudienceContact = Pick<
 > & { player_id?: string | null }
 
 export type AudienceFilter = {
-  type: "contacts" | "leads" | "event" | "fixed"
+  type: "contacts" | "leads" | "event" | "fixed" | "players"
   filters?: {
     tags?: string[]
     consent?: string
@@ -19,6 +19,7 @@ export type AudienceFilter = {
     participant_statuses?: ParticipantStatus[]
   }
   contactIds?: string[]
+  playerIds?: string[]
 }
 
 function isAudienceFilter(x: unknown): x is AudienceFilter {
@@ -51,6 +52,8 @@ export async function resolveAudienceServer(
   const audience = rawAudience
 
   let candidates: AudienceContact[] = []
+  // Selected players with no linked contact at all — counted as skipped
+  let unreachable = 0
 
   if (audience.type === "fixed") {
     const ids = audience.contactIds ?? []
@@ -105,6 +108,29 @@ export async function resolveAudienceServer(
       }
     }
     candidates = await attachPrimaryPlayers(Array.from(uniq.values()))
+  } else if (audience.type === "players") {
+    // One email per selected player, sent to their primary guardian (or any
+    // linked contact). Siblings sharing a parent each get their own email.
+    const ids = audience.playerIds ?? []
+    if (ids.length === 0) return { contacts: [], skipped: 0, total: 0 }
+    const { data } = await serviceClient
+      .from("player_contacts")
+      .select("player_id, is_primary, contacts(id, first_name, last_name, email, unsubscribed_at, marketing_consent, tags, archived_at)")
+      .in("player_id", ids)
+      .order("is_primary", { ascending: false })
+    const byPlayer = new Map<string, AudienceContact>()
+    for (const row of data ?? []) {
+      const r = row as unknown as { player_id: string; contacts: (AudienceContact & { archived_at: string | null }) | null }
+      if (!r.contacts || r.contacts.archived_at || byPlayer.has(r.player_id)) continue
+      const c = r.contacts
+      byPlayer.set(r.player_id, {
+        id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email,
+        unsubscribed_at: c.unsubscribed_at, marketing_consent: c.marketing_consent, tags: c.tags,
+        player_id: r.player_id,
+      })
+    }
+    candidates = Array.from(byPlayer.values())
+    unreachable = ids.length - candidates.length
   } else if (audience.type === "event") {
     const filters = audience.filters ?? {}
     if (!filters.event_id) return { contacts: [], skipped: 0, total: 0 }
@@ -152,7 +178,7 @@ export async function resolveAudienceServer(
     candidates = await attachPrimaryPlayers(Array.from(uniq.values()))
   }
 
-  const total = candidates.length
+  const total = candidates.length + unreachable
   const valid = candidates.filter((c) => c.email && !c.unsubscribed_at)
   const skipped = total - valid.length
 

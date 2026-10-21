@@ -574,5 +574,53 @@ export async function listContactsForFixed(
   return data ?? []
 }
 
+export type EmailPlayerOption = {
+  id: string
+  name: string
+  parentName: string | null
+  parentEmail: string | null
+}
+
+function toEmailPlayerOption(p: {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  player_contacts: { is_primary: boolean; contacts: { first_name: string | null; last_name: string | null; email: string | null } | null }[]
+}): EmailPlayerOption {
+  const links = p.player_contacts ?? []
+  const parent = (links.find((pc) => pc.is_primary) ?? links[0])?.contacts ?? null
+  return {
+    id: p.id,
+    name: [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unnamed player",
+    parentName: parent ? [parent.first_name, parent.last_name].filter(Boolean).join(" ") || null : null,
+    parentEmail: parent?.email ?? null,
+  }
+}
+
+const EMAIL_PLAYER_SELECT = "id, first_name, last_name, player_contacts(is_primary, contacts(first_name, last_name, email))"
+
+export async function searchPlayersForEmail(query: string): Promise<EmailPlayerOption[]> {
+  await requireAdmin()
+  const q = query.replace(/[%,()*]/g, " ").trim()
+  if (q.length < 2) return []
+  const supabase = await createClient()
+  // Match first name, last name, or "first last" typed in full
+  const parts = q.split(/\s+/)
+  let req = supabase.from("players").select(EMAIL_PLAYER_SELECT).is("archived_at", null)
+  req = parts.length > 1
+    ? req.ilike("first_name", `%${parts[0]}%`).ilike("last_name", `%${parts.slice(1).join(" ")}%`)
+    : req.or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+  const { data } = await req.order("first_name").limit(15)
+  return (data ?? []).map(toEmailPlayerOption)
+}
+
+export async function getPlayersForEmail(ids: string[]): Promise<EmailPlayerOption[]> {
+  await requireAdmin()
+  if (ids.length === 0) return []
+  const supabase = await createClient()
+  const { data } = await supabase.from("players").select(EMAIL_PLAYER_SELECT).in("id", ids)
+  return (data ?? []).map(toEmailPlayerOption)
+}
+
 // Keep type exports available via re-export
 export type { AudienceFilter, AudienceContact }

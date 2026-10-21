@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { formatInTimeZone } from "date-fns-tz"
-import { Upload, X, FileText } from "lucide-react"
+import { Upload, X, FileText, Plus, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -29,6 +29,9 @@ import {
   uploadAttachment,
   deleteAttachment,
   saveAsTemplate,
+  searchPlayersForEmail,
+  getPlayersForEmail,
+  type EmailPlayerOption,
   type AudienceFilter,
   type AudienceContact,
   type EmailTemplateRow,
@@ -59,7 +62,7 @@ const MERGE_FIELDS = [
   "event_address",
 ]
 
-type SourceType = "contacts" | "event" | "fixed" | "leads"
+type SourceType = "contacts" | "event" | "fixed" | "leads" | "players"
 
 export function CampaignComposer({
   open,
@@ -102,6 +105,10 @@ export function CampaignComposer({
   const [eventId, setEventId] = useState(prefilledEventId ?? initialCampaign?.event_id ?? "")
   const [statuses, setStatuses] = useState<ParticipantStatus[]>(["confirmed"])
   const [fixedIds] = useState<string[]>(prefilledContactIds ?? [])
+  const [selectedPlayers, setSelectedPlayers] = useState<EmailPlayerOption[]>([])
+  const [playerQuery, setPlayerQuery] = useState("")
+  const [playerResults, setPlayerResults] = useState<EmailPlayerOption[]>([])
+  const [searchingPlayers, setSearchingPlayers] = useState(false)
   const [resolved, setResolved] = useState<{ contacts: AudienceContact[]; skipped: number; total: number } | null>(null)
   const [resolving, setResolving] = useState(false)
 
@@ -174,9 +181,49 @@ export function CampaignComposer({
   const [sending, setSending] = useState(false)
   const [confirmSend, setConfirmSend] = useState(false)
 
+  // Restore selected players when reopening a saved "players" campaign
+  useEffect(() => {
+    const a = initialCampaign?.audience as unknown as AudienceFilter | null
+    if (a?.type !== "players" || !a.playerIds?.length) return
+    getPlayersForEmail(a.playerIds).then(setSelectedPlayers)
+  }, [initialCampaign])
+
+  // Debounced player search, driven from the input's onChange
+  const playerSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const playerSearchSeq = useRef(0)
+  function handlePlayerQuery(value: string) {
+    setPlayerQuery(value)
+    if (playerSearchTimer.current) clearTimeout(playerSearchTimer.current)
+    const q = value.trim()
+    if (q.length < 2) {
+      setPlayerResults([])
+      setSearchingPlayers(false)
+      return
+    }
+    setSearchingPlayers(true)
+    const seq = ++playerSearchSeq.current
+    playerSearchTimer.current = setTimeout(async () => {
+      const res = await searchPlayersForEmail(q)
+      if (seq !== playerSearchSeq.current) return
+      setPlayerResults(res)
+      setSearchingPlayers(false)
+    }, 250)
+  }
+
+  function addPlayer(p: EmailPlayerOption) {
+    setSelectedPlayers((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]))
+  }
+
+  function removePlayer(id: string) {
+    setSelectedPlayers((prev) => prev.filter((x) => x.id !== id))
+  }
+
   const buildAudience = useCallback((): AudienceFilter => {
     if (sourceType === "fixed") {
       return { type: "fixed", contactIds: fixedIds }
+    }
+    if (sourceType === "players") {
+      return { type: "players", playerIds: selectedPlayers.map((p) => p.id) }
     }
     if (sourceType === "event") {
       return {
@@ -207,7 +254,7 @@ export function CampaignComposer({
         source: source || undefined,
       },
     }
-  }, [sourceType, fixedIds, eventId, statuses, source, tagsInput, consent])
+  }, [sourceType, fixedIds, selectedPlayers, eventId, statuses, source, tagsInput, consent])
 
   // Resolve audience on changes
   useEffect(() => {
@@ -486,7 +533,7 @@ export function CampaignComposer({
               <div className="space-y-2">
                 <Label>Audience source</Label>
                 <div className="flex gap-2 flex-wrap">
-                  {(["contacts", "leads", "event", "fixed"] as SourceType[]).map((s) => (
+                  {(["contacts", "leads", "event", "players", "fixed"] as SourceType[]).map((s) => (
                     <button
                       key={s}
                       type="button"
@@ -500,7 +547,7 @@ export function CampaignComposer({
                         s === "fixed" && fixedIds.length === 0 && "opacity-40 cursor-not-allowed"
                       )}
                     >
-                      {s === "contacts" ? "Contacts" : s === "leads" ? "Leads" : s === "event" ? "Event participants" : `Fixed list (${fixedIds.length})`}
+                      {s === "contacts" ? "Contacts" : s === "leads" ? "Leads" : s === "event" ? "Event participants" : s === "players" ? `Pick players${selectedPlayers.length ? ` (${selectedPlayers.length})` : ""}` : `Fixed list (${fixedIds.length})`}
                     </button>
                   ))}
                 </div>
@@ -571,6 +618,87 @@ export function CampaignComposer({
                 </div>
               )}
 
+              {sourceType === "players" && (
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <Label>Search players</Label>
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <Input
+                        value={playerQuery}
+                        onChange={(e) => handlePlayerQuery(e.target.value)}
+                        placeholder="Type a player's name..."
+                        className="pl-8"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500">Each player&apos;s parent gets their own email, with the player&apos;s name merged in.</p>
+                  </div>
+
+                  {playerQuery.trim().length >= 2 && (
+                    <div className="rounded-md border divide-y max-h-56 overflow-y-auto">
+                      {searchingPlayers && playerResults.length === 0 ? (
+                        <div className="p-3 text-sm text-gray-400">Searching...</div>
+                      ) : playerResults.length === 0 ? (
+                        <div className="p-3 text-sm text-gray-400">No players found</div>
+                      ) : (
+                        playerResults.map((p) => {
+                          const added = selectedPlayers.some((x) => x.id === p.id)
+                          return (
+                            <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-gray-900 truncate">{p.name}</div>
+                                <div className={cn("text-xs truncate", p.parentEmail ? "text-gray-500" : "text-amber-600")}>
+                                  {p.parentEmail
+                                    ? `${p.parentName ?? "Parent"} · ${p.parentEmail}`
+                                    : "No parent email on file"}
+                                </div>
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={added ? "secondary" : "outline"}
+                                disabled={added}
+                                onClick={() => addPlayer(p)}
+                              >
+                                {added ? "Added" : <><Plus className="h-3.5 w-3.5 mr-1" />Add</>}
+                              </Button>
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  )}
+
+                  {selectedPlayers.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label>Selected ({selectedPlayers.length})</Label>
+                        <button type="button" onClick={() => setSelectedPlayers([])} className="text-xs text-gray-500 hover:text-gray-800">
+                          Clear all
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedPlayers.map((p) => (
+                          <span
+                            key={p.id}
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs",
+                              p.parentEmail ? "bg-white text-gray-800" : "bg-amber-50 text-amber-800 border-amber-200"
+                            )}
+                            title={p.parentEmail ? `${p.parentName ?? "Parent"} · ${p.parentEmail}` : "No parent email - will be skipped"}
+                          >
+                            {p.name}
+                            <button type="button" onClick={() => removePlayer(p.id)} className="text-gray-400 hover:text-gray-700" aria-label={`Remove ${p.name}`}>
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {sourceType === "fixed" && (
                 <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
                   {fixedIds.length} contacts pre-selected
@@ -591,7 +719,7 @@ export function CampaignComposer({
                 {resolved && resolved.contacts.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {resolved.contacts.slice(0, 5).map((c) => (
-                      <Badge key={c.id} variant="secondary" className="text-xs">
+                      <Badge key={`${c.id}-${c.player_id ?? ""}`} variant="secondary" className="text-xs">
                         {c.first_name} {c.last_name}
                       </Badge>
                     ))}

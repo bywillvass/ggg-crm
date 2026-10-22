@@ -126,7 +126,7 @@ function replaceMergeFields(
 function brandedWrapper(opts: {
   bodyHtml: string
   footerHtml: string | null
-  unsubscribeUrl: string
+  unsubscribeUrl: string | null
   orgName: string
 }): string {
   const { bodyHtml, footerHtml, unsubscribeUrl, orgName } = opts
@@ -156,9 +156,9 @@ function brandedWrapper(opts: {
             <tr>
               <td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">
                 ${footer}
-                <p style="margin:12px 0 0 0;">
+                ${unsubscribeUrl ? `<p style="margin:12px 0 0 0;">
                   <a href="${unsubscribeUrl}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>
-                </p>
+                </p>` : ""}
               </td>
             </tr>
           </table>
@@ -174,9 +174,10 @@ function isBuilderEmail(html: string): boolean {
   return html.includes("G%20logo") && html.includes("iaigtvfdteagnvkljvcq.supabase.co")
 }
 
-function injectHtmlFooter(html: string, unsubscribeUrl: string, footerHtml: string | null, orgName: string): string {
+function injectHtmlFooter(html: string, unsubscribeUrl: string | null, footerHtml: string | null, orgName: string): string {
   // Builder emails already have a full branded footer — only inject the unsubscribe link
   if (isBuilderEmail(html)) {
+    if (!unsubscribeUrl) return html
     const unsubBlock = `
     <div style="text-align:center;padding:0 0 16px 0;">
       <a href="${unsubscribeUrl}" style="color:#A9ABC8;text-decoration:underline;font-size:11px;font-family:'DM Sans',Arial,Helvetica,sans-serif;">Unsubscribe</a>
@@ -191,7 +192,7 @@ function injectHtmlFooter(html: string, unsubscribeUrl: string, footerHtml: stri
     <hr style="margin:24px 0;border:none;border-top:1px solid #e5e7eb;" />
     <div style="font-size:12px;color:#6b7280;font-family:'DM Sans', sans-serif;">
       ${footerHtml ?? `<p style="margin:0;">&copy; ${new Date().getFullYear()} ${orgName}</p>`}
-      <p style="margin:8px 0 0 0;"><a href="${unsubscribeUrl}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a></p>
+      ${unsubscribeUrl ? `<p style="margin:8px 0 0 0;"><a href="${unsubscribeUrl}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a></p>` : ""}
     </div>
   `
   if (html.includes("</body>")) {
@@ -257,8 +258,10 @@ async function prepareMessage(
   const fromEmail = overrides?.fromEmail ?? campaignFromEmail ?? settings.email_from_address ?? "noreply@gingaglobalgroup.com"
   const replyTo = overrides?.replyTo ?? campaignOverride?.reply_to ?? settings.email_reply_to ?? undefined
 
-  const unsubscribeToken = await signToken({ contact_id: message.contact_id }, "365d")
-  const unsubscribeUrl = `${appUrl()}/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`
+  // Direct emails to addresses outside the CRM have no contact, so nothing to unsubscribe from
+  const unsubscribeUrl = message.contact_id
+    ? `${appUrl()}/unsubscribe?token=${encodeURIComponent(await signToken({ contact_id: message.contact_id }, "365d"))}`
+    : null
 
   const mergedHtml = replaceMergeFields(message.body_html, message)
   const mergedText = replaceMergeFields(message.body_text, message)
@@ -281,7 +284,7 @@ async function prepareMessage(
   }
 
   const finalText = mergedText || mergedHtml.replace(/<[^>]+>/g, "")
-  const finalTextWithFooter = `${finalText}\n\n---\nUnsubscribe: ${unsubscribeUrl}`
+  const finalTextWithFooter = unsubscribeUrl ? `${finalText}\n\n---\nUnsubscribe: ${unsubscribeUrl}` : finalText
 
   return {
     from: `${fromName} <${fromEmail}>`,
@@ -289,10 +292,12 @@ async function prepareMessage(
     subject: mergedSubject,
     html: finalHtml,
     text: finalTextWithFooter,
-    headers: {
-      "List-Unsubscribe": `<${unsubscribeUrl}>`,
-      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-    },
+    headers: unsubscribeUrl
+      ? {
+          "List-Unsubscribe": `<${unsubscribeUrl}>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        }
+      : {},
     replyTo,
   }
 }
@@ -593,6 +598,52 @@ export async function sendSingleEmail(
     await markFailed(message.id, errMsg)
     if (message.campaign_id) await recalculateCampaignCounts(message.campaign_id)
     return { ok: false, error: errMsg }
+  }
+}
+
+// Sends straight to an address that isn't a CRM contact. Nothing is stored in
+// email_messages (it needs a contact), so there's no tracking or history.
+export async function sendDirectEmail(input: {
+  to: string
+  name?: string | null
+  subject: string
+  bodyHtml?: string | null
+  bodyText?: string | null
+  overrides?: SendOverrides
+}): Promise<{ ok: boolean; error?: string }> {
+  const settings = await loadSettings()
+  if (!settings) return { ok: false, error: "Settings not found" }
+  const resend = getResend()
+  if (!resend) return { ok: false, error: "RESEND_API_KEY not configured" }
+
+  const [first, ...rest] = (input.name ?? "").trim().split(/\s+/).filter(Boolean)
+  const message = {
+    contact_id: null,
+    campaign_id: null,
+    to_email: input.to,
+    subject: input.subject,
+    body_html: input.bodyHtml ?? null,
+    body_text: input.bodyText ?? null,
+    contacts: first ? { first_name: first, last_name: rest.join(" ") || null } : null,
+    players: null,
+    events: null,
+    email_campaigns: null,
+  } as unknown as MessageWithJoins
+
+  try {
+    const prepared = await prepareMessage(message, settings, input.overrides)
+    const { error } = await resend.emails.send({
+      from: prepared.from,
+      to: prepared.to,
+      subject: prepared.subject,
+      html: prepared.html,
+      text: prepared.text,
+      ...(prepared.replyTo ? { replyTo: prepared.replyTo } : {}),
+    })
+    if (error) return { ok: false, error: error.message }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 

@@ -5,10 +5,11 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { format } from "date-fns"
-import { Plus, Copy, Trash2, Eye, Users } from "lucide-react"
+import { Plus, Copy, Trash2, Eye, Users, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { CampaignComposer } from "./CampaignComposer"
+import { QuickEmailDialog } from "./QuickEmailDialog"
 import {
   duplicateCampaign,
   deleteCampaign,
@@ -41,6 +42,7 @@ export function EmailShell({
   const router = useRouter()
   const [campaigns] = useState<EmailCampaignRow[]>(initialCampaigns)
   const [showComposer, setShowComposer] = useState(false)
+  const [showQuick, setShowQuick] = useState(false)
   const [subSearch, setSubSearch] = useState("")
 
   const activeSubscribers = subscribers.filter((s) => !s.unsubscribed_at)
@@ -82,13 +84,19 @@ export function EmailShell({
           <h1 className="text-2xl font-bold text-[#0C0F4C]">Email</h1>
           <p className="text-sm text-gray-500">{campaigns.length} campaigns</p>
         </div>
-        <Button
-          onClick={() => setShowComposer(true)}
-          className="bg-[#C9A227] hover:bg-[#b8911f] text-white"
-        >
-          <Plus className="h-4 w-4 mr-1.5" />
-          New campaign
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setShowQuick(true)}>
+            <Send className="h-4 w-4 mr-1.5" />
+            Quick email
+          </Button>
+          <Button
+            onClick={() => setShowComposer(true)}
+            className="bg-[#C9A227] hover:bg-[#b8911f] text-white"
+          >
+            <Plus className="h-4 w-4 mr-1.5" />
+            New campaign
+          </Button>
+        </div>
       </div>
 
       <div className="rounded-lg border bg-white overflow-x-auto">
@@ -233,6 +241,8 @@ export function EmailShell({
           </table>
         </div>
       </div>
+
+      <QuickEmailDialog open={showQuick} onClose={() => setShowQuick(false)} templates={templates} />
 
       {showComposer && (
         <CampaignComposer

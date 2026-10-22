@@ -4,7 +4,7 @@ import { requireAdmin, requireAuth } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
 import { logActivity } from "@/lib/activity"
-import { processEmailQueue, sendSingleEmail, recalculateCampaignCounts } from "@/lib/email/sender"
+import { processEmailQueue, sendSingleEmail, sendDirectEmail, recalculateCampaignCounts } from "@/lib/email/sender"
 import { FROM_ADDRESSES } from "@/lib/email/from-options"
 import { resolveAudienceServer, type AudienceContact, type AudienceFilter } from "@/lib/email/audience"
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types"
@@ -505,6 +505,174 @@ export async function sendOneOffEmail(input: {
   })
 
   return { error: null }
+}
+
+// ─── Quick email (anyone, in the CRM or not) ──────────────────────────────────
+
+export type QuickRecipient = {
+  email: string
+  name: string | null
+  contactId: string | null
+  playerId: string | null
+  // e.g. "Parent of Luke Leventis", shown in the picker only
+  label: string | null
+  unsubscribed: boolean
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+export async function searchEmailRecipients(query: string): Promise<QuickRecipient[]> {
+  await requireAdmin()
+  const q = query.replace(/[%,()*]/g, " ").trim()
+  if (q.length < 2) return []
+  const supabase = await createClient()
+  const parts = q.split(/\s+/)
+  let contactsReq = supabase
+    .from("contacts")
+    .select("id, first_name, last_name, email, unsubscribed_at")
+    .is("archived_at", null)
+    .not("email", "is", null)
+  contactsReq = parts.length > 1
+    ? contactsReq.ilike("first_name", `%${parts[0]}%`).ilike("last_name", `%${parts.slice(1).join(" ")}%`)
+    : contactsReq.or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%,email.ilike.%${q}%`)
+
+  let playersReq = supabase
+    .from("players")
+    .select("id, first_name, last_name, player_contacts(is_primary, contacts(id, first_name, last_name, email, unsubscribed_at, archived_at))")
+    .is("archived_at", null)
+  playersReq = parts.length > 1
+    ? playersReq.ilike("first_name", `%${parts[0]}%`).ilike("last_name", `%${parts.slice(1).join(" ")}%`)
+    : playersReq.or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+
+  const [{ data: contacts }, { data: players }] = await Promise.all([
+    contactsReq.order("first_name").limit(10),
+    playersReq.order("first_name").limit(10),
+  ])
+
+  const out: QuickRecipient[] = []
+  const name = (c: { first_name: string | null; last_name: string | null }) =>
+    [c.first_name, c.last_name].filter(Boolean).join(" ") || null
+
+  // Players first: emailing "Luke" usually means emailing Luke's parent
+  for (const p of players ?? []) {
+    const links = (p.player_contacts ?? []).filter((pc) => pc.contacts?.email && !pc.contacts.archived_at)
+    const pick = links.find((pc) => pc.is_primary) ?? links[0]
+    if (!pick?.contacts) continue
+    const c = pick.contacts
+    out.push({
+      email: c.email!,
+      name: name(c),
+      contactId: c.id,
+      playerId: p.id,
+      label: `${name(p) ?? "Unnamed player"} (player)`,
+      unsubscribed: !!c.unsubscribed_at,
+    })
+  }
+  for (const c of contacts ?? []) {
+    if (out.some((r) => r.contactId === c.id)) continue
+    out.push({ email: c.email!, name: name(c), contactId: c.id, playerId: null, label: null, unsubscribed: !!c.unsubscribed_at })
+  }
+  return out
+}
+
+export async function sendQuickEmail(input: {
+  recipients: { email: string; name?: string | null; contactId?: string | null; playerId?: string | null }[]
+  subject: string
+  bodyHtml?: string | null
+  bodyText?: string | null
+  fromEmail?: string | null
+  replyTo?: string | null
+}): Promise<{ sent: number; failed: { email: string; error: string }[] }> {
+  await requireAdmin()
+  const user = await requireAuth()
+  const overrides = {
+    fromEmail: input.fromEmail ?? undefined,
+    fromName: input.fromEmail ? FROM_ADDRESSES.find((f) => f.value === input.fromEmail)?.name : undefined,
+    replyTo: input.replyTo ?? undefined,
+  }
+
+  let sent = 0
+  const failed: { email: string; error: string }[] = []
+
+  for (const r of input.recipients.slice(0, 50)) {
+    const email = r.email.trim()
+    if (!EMAIL_RE.test(email)) {
+      failed.push({ email, error: "Not a valid email address" })
+      continue
+    }
+
+    // Typed addresses that already belong to a contact are sent as that contact,
+    // so the email shows in their history and merge fields fill in
+    let contactId = r.contactId ?? null
+    let playerId = r.playerId ?? null
+    if (!contactId) {
+      const { data: match } = await serviceClient
+        .from("contacts")
+        .select("id")
+        .ilike("email", email)
+        .is("archived_at", null)
+        .limit(1)
+        .maybeSingle()
+      contactId = match?.id ?? null
+    }
+    if (contactId && !playerId) {
+      const { data: link } = await serviceClient
+        .from("player_contacts")
+        .select("player_id")
+        .eq("contact_id", contactId)
+        .order("is_primary", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      playerId = link?.player_id ?? null
+    }
+
+    if (!contactId) {
+      const res = await sendDirectEmail({
+        to: email,
+        name: r.name,
+        subject: input.subject,
+        bodyHtml: input.bodyHtml,
+        bodyText: input.bodyText,
+        overrides,
+      })
+      if (res.ok) sent++
+      else failed.push({ email, error: res.error ?? "Failed to send" })
+      continue
+    }
+
+    const { data: inserted } = await serviceClient
+      .from("email_messages")
+      .insert({
+        contact_id: contactId,
+        to_email: email,
+        subject: input.subject,
+        body_html: input.bodyHtml ?? null,
+        body_text: input.bodyText ?? null,
+        player_id: playerId,
+        status: "queued",
+      })
+      .select("id")
+      .single()
+    if (!inserted) {
+      failed.push({ email, error: "Could not create message" })
+      continue
+    }
+    const res = await sendSingleEmail(inserted.id, overrides)
+    if (!res.ok) {
+      failed.push({ email, error: res.error ?? "Failed to send" })
+      continue
+    }
+    sent++
+    await logActivity({
+      type: "email_sent",
+      contact_id: contactId,
+      player_id: playerId ?? undefined,
+      body: `Email sent: ${input.subject}`,
+      created_by: user.id,
+    })
+  }
+
+  return { sent, failed }
 }
 
 // ─── Contact-specific ─────────────────────────────────────────────────────────

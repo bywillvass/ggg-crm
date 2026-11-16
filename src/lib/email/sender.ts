@@ -4,6 +4,7 @@ import { signToken } from "@/lib/tokens"
 import { formatInTimeZone } from "date-fns-tz"
 import type { Tables } from "@/lib/database.types"
 import { FROM_ADDRESSES } from "@/lib/email/from-options"
+import { BUILDER_PREFIX } from "@/lib/email/templates"
 
 type SettingsRow = Tables<"settings">
 type EmailMessageRow = Tables<"email_messages">
@@ -85,8 +86,10 @@ function replaceMergeFields(
   const player = message.players
   const event = message.events
 
-  const contactFirst = contact?.first_name ?? "there"
-  const contactLast = contact?.last_name ?? ""
+  // Addresses outside the CRM have no contact, so use the name typed for them
+  const [nameFirst, ...nameRest] = (message.to_name ?? "").trim().split(/\s+/).filter(Boolean)
+  const contactFirst = contact?.first_name ?? nameFirst ?? "there"
+  const contactLast = contact?.last_name ?? (nameRest.join(" ") || "")
   const playerFirst = player?.first_name ?? ""
   const playerLast = player?.last_name ?? ""
 
@@ -235,8 +238,11 @@ async function fetchAttachmentsForCampaign(campaignId: string): Promise<Array<{ 
 async function prepareMessage(
   message: MessageWithJoins,
   settings: SettingsRow,
-  overrides?: SendOverrides
+  overrides?: SendOverrides,
+  // Previews in the CRM get a dead unsubscribe link so clicking it can't unsubscribe anyone
+  preview = false
 ): Promise<{
+  fromEmail: string
   from: string
   to: string
   subject: string
@@ -254,17 +260,24 @@ async function prepareMessage(
     ? (FROM_ADDRESSES.find(f => f.value === campaignFromEmail)?.name ?? orgName)
     : null
 
-  const fromName = overrides?.fromName ?? campaignFromName ?? settings.email_from_name ?? orgName
-  const fromEmail = overrides?.fromEmail ?? campaignFromEmail ?? settings.email_from_address ?? "noreply@gingaglobalgroup.com"
-  const replyTo = overrides?.replyTo ?? campaignOverride?.reply_to ?? settings.email_reply_to ?? undefined
+  // Once sent, the message keeps the from/reply-to it actually went out with
+  const storedFromEmail = message.from_address ?? null
+  const storedFromName = storedFromEmail ? (FROM_ADDRESSES.find(f => f.value === storedFromEmail)?.name ?? orgName) : null
+
+  const fromName = overrides?.fromName ?? storedFromName ?? campaignFromName ?? settings.email_from_name ?? orgName
+  const fromEmail = overrides?.fromEmail ?? storedFromEmail ?? campaignFromEmail ?? settings.email_from_address ?? "noreply@gingaglobalgroup.com"
+  const replyTo = overrides?.replyTo ?? message.reply_to ?? campaignOverride?.reply_to ?? settings.email_reply_to ?? undefined
 
   // Direct emails to addresses outside the CRM have no contact, so nothing to unsubscribe from
-  const unsubscribeUrl = message.contact_id
-    ? `${appUrl()}/unsubscribe?token=${encodeURIComponent(await signToken({ contact_id: message.contact_id }, "365d"))}`
-    : null
+  const unsubscribeUrl = !message.contact_id
+    ? null
+    : preview
+      ? "#"
+      : `${appUrl()}/unsubscribe?token=${encodeURIComponent(await signToken({ contact_id: message.contact_id }, "365d"))}`
 
   const mergedHtml = replaceMergeFields(message.body_html, message)
-  const mergedText = replaceMergeFields(message.body_text, message)
+  // Builder emails keep their raw fields in body_text, which isn't a text version
+  const mergedText = message.body_text?.startsWith(BUILDER_PREFIX) ? "" : replaceMergeFields(message.body_text, message)
   const mergedSubject = replaceMergeFields(message.subject, message)
 
   // Determine format: if body_html present, treat as html; otherwise plain
@@ -287,6 +300,7 @@ async function prepareMessage(
   const finalTextWithFooter = unsubscribeUrl ? `${finalText}\n\n---\nUnsubscribe: ${unsubscribeUrl}` : finalText
 
   return {
+    fromEmail,
     from: `${fromName} <${fromEmail}>`,
     to: message.to_email,
     subject: mergedSubject,
@@ -325,13 +339,19 @@ async function markSkipped(messageId: string, reason: string): Promise<void> {
     .eq("id", messageId)
 }
 
-async function markSent(messageId: string, resendId: string | null): Promise<void> {
+async function markSent(
+  messageId: string,
+  resendId: string | null,
+  prepared: { fromEmail: string; replyTo?: string }
+): Promise<void> {
   await serviceClient
     .from("email_messages")
     .update({
       status: "sent",
       sent_at: new Date().toISOString(),
       resend_id: resendId,
+      from_address: prepared.fromEmail,
+      reply_to: prepared.replyTo ?? null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", messageId)
@@ -475,13 +495,13 @@ export async function processEmailQueue(
         for (let i = 0; i < noAttachments.length; i++) {
           const m = noAttachments[i]
           const resId = resultData[i]?.id ?? null
-          await markSent(m.id, resId)
+          await markSent(m.id, resId, prepared[i])
           sent++
           if (m.campaign_id) touchedCampaigns.add(m.campaign_id)
         }
       } else {
-        for (const m of noAttachments) {
-          await markSent(m.id, null)
+        for (const [i, m] of noAttachments.entries()) {
+          await markSent(m.id, null, prepared[i])
           sent++
           if (m.campaign_id) touchedCampaigns.add(m.campaign_id)
         }
@@ -521,7 +541,7 @@ export async function processEmailQueue(
         attachments,
       })
       const resId = (result as unknown as { data?: { id?: string } }).data?.id ?? null
-      await markSent(m.id, resId)
+      await markSent(m.id, resId, prepared)
       sent++
       if (m.campaign_id) touchedCampaigns.add(m.campaign_id)
     } catch (err) {
@@ -558,7 +578,8 @@ export async function sendSingleEmail(
 
   if (!m) return { ok: false, error: "Message not found" }
   const message = m as unknown as MessageWithJoins
-  if (!message.contacts) {
+  // A message with no contact_id is a quick email to an address outside the CRM
+  if (message.contact_id && !message.contacts) {
     await markSkipped(message.id, "No contact")
     return { ok: false, error: "No contact" }
   }
@@ -589,8 +610,9 @@ export async function sendSingleEmail(
       ...(prepared.replyTo ? { replyTo: prepared.replyTo } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
     })
-    const resId = (result as unknown as { data?: { id?: string } }).data?.id ?? null
-    await markSent(message.id, resId)
+    if (result.error) throw new Error(result.error.message)
+    const resId = result.data?.id ?? null
+    await markSent(message.id, resId, prepared)
     if (message.campaign_id) await recalculateCampaignCounts(message.campaign_id)
     return { ok: true }
   } catch (err) {
@@ -601,50 +623,26 @@ export async function sendSingleEmail(
   }
 }
 
-// Sends straight to an address that isn't a CRM contact. Nothing is stored in
-// email_messages (it needs a contact), so there's no tracking or history.
-export async function sendDirectEmail(input: {
-  to: string
-  name?: string | null
-  subject: string
-  bodyHtml?: string | null
-  bodyText?: string | null
-  overrides?: SendOverrides
-}): Promise<{ ok: boolean; error?: string }> {
+// Renders a logged message the way the recipient saw it, for the sent log
+export async function renderMessagePreview(
+  messageId: string
+): Promise<{ subject: string; html: string; from: string; replyTo: string | null } | null> {
   const settings = await loadSettings()
-  if (!settings) return { ok: false, error: "Settings not found" }
-  const resend = getResend()
-  if (!resend) return { ok: false, error: "RESEND_API_KEY not configured" }
-
-  const [first, ...rest] = (input.name ?? "").trim().split(/\s+/).filter(Boolean)
-  const message = {
-    contact_id: null,
-    campaign_id: null,
-    to_email: input.to,
-    subject: input.subject,
-    body_html: input.bodyHtml ?? null,
-    body_text: input.bodyText ?? null,
-    contacts: first ? { first_name: first, last_name: rest.join(" ") || null } : null,
-    players: null,
-    events: null,
-    email_campaigns: null,
-  } as unknown as MessageWithJoins
-
-  try {
-    const prepared = await prepareMessage(message, settings, input.overrides)
-    const { error } = await resend.emails.send({
-      from: prepared.from,
-      to: prepared.to,
-      subject: prepared.subject,
-      html: prepared.html,
-      text: prepared.text,
-      ...(prepared.replyTo ? { replyTo: prepared.replyTo } : {}),
-    })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
-  }
+  if (!settings) return null
+  const { data: m } = await serviceClient
+    .from("email_messages")
+    .select(`
+      *,
+      contacts(*),
+      players:player_id(id, first_name, last_name),
+      events:event_id(id, title, start_at, venue_name, address, timezone),
+      email_campaigns:campaign_id(from_name, reply_to)
+    `)
+    .eq("id", messageId)
+    .single()
+  if (!m) return null
+  const prepared = await prepareMessage(m as unknown as MessageWithJoins, settings, undefined, true)
+  return { subject: prepared.subject, html: prepared.html, from: prepared.from, replyTo: prepared.replyTo ?? null }
 }
 
 export async function scheduleEventReminders(): Promise<{ reminders: number }> {
@@ -743,6 +741,7 @@ export async function scheduleEventReminders(): Promise<{ reminders: number }> {
         body_text: template.body_text,
         event_id: event.id,
         player_id: raw.player_id,
+        source: "reminder",
         status: "queued",
       })
       reminders++

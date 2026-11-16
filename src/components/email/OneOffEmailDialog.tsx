@@ -20,12 +20,16 @@ import { sendOneOffEmail } from "@/app/(app)/email/actions"
 import type { EmailTemplateRow } from "@/app/(app)/email/actions"
 import { buildStructuredEmail } from "@/lib/email/builder"
 import { FROM_ADDRESSES, DEFAULT_FROM } from "@/lib/email/from-options"
+import { loadContent, saveContent } from "@/lib/email/templates"
+import { SaveTemplateDialog, type TemplateContent } from "./SaveTemplateDialog"
 
 type BodyMode = "text" | "html" | "builder"
 
 const MERGE_FIELDS = [
   "contact_first_name",
+  "contact_last_name",
   "player_first_name",
+  "player_last_name",
   "event_title",
   "event_date",
 ]
@@ -65,6 +69,9 @@ export function OneOffEmailDialog({
     defaultBody.trimStart().startsWith("<") ? "html" : "text"
   )
   const [sending, setSending] = useState(false)
+  const [savedTemplates, setSavedTemplates] = useState<EmailTemplateRow[]>([])
+  const [templateContent, setTemplateContent] = useState<TemplateContent | null>(null)
+  const allTemplates = [...templates, ...savedTemplates.filter((t) => !templates.some((x) => x.id === t.id))]
 
   // From / reply-to
   const [fromEmail, setFromEmail] = useState<string>(DEFAULT_FROM)
@@ -106,9 +113,28 @@ export function OneOffEmailDialog({
 
   function applyTemplate(t: EmailTemplateRow) {
     setSubject(t.subject ?? "")
-    const b = t.body_html ?? t.body_text ?? ""
-    setBody(b)
-    setMode(b.trimStart().startsWith("<") ? "html" : "text")
+    const c = loadContent(t)
+    setMode(c.format === "plain" ? "text" : c.format)
+    setBody(c.format === "html" ? c.bodyHtml : c.bodyText)
+    setBuilderEyebrow(c.builder.eyebrow)
+    setBuilderHeading(c.builder.heading)
+    setBuilderSubheading(c.builder.subheading)
+    setBuilderBody(c.builder.body)
+  }
+
+  function openSaveTemplate() {
+    if (!subject.trim()) return toast.error("Add a subject first")
+    const empty = mode === "builder" ? !builderHeading.trim() && !builderBody.trim() : !body.trim()
+    if (empty) return toast.error("Write a message first")
+    setTemplateContent({
+      subject: subject.trim(),
+      ...saveContent({
+        format: mode === "text" ? "plain" : mode,
+        bodyText: body,
+        bodyHtml: body,
+        builder: { eyebrow: builderEyebrow, heading: builderHeading, subheading: builderSubheading, body: builderBody },
+      }),
+    })
   }
 
   async function handleSend() {
@@ -212,18 +238,18 @@ export function OneOffEmailDialog({
             </div>
           </div>
 
-          {templates.length > 0 && (
+          {allTemplates.length > 0 && (
             <div className="space-y-1">
               <Label>Template</Label>
               <Select
                 value=""
                 onChange={(e) => {
-                  const t = templates.find((tmpl) => tmpl.id === e.target.value)
+                  const t = allTemplates.find((tmpl) => tmpl.id === e.target.value)
                   if (t) applyTemplate(t)
                 }}
               >
                 <option value="">Select a template…</option>
-                {templates.map((t) => (
+                {allTemplates.map((t) => (
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </Select>
@@ -366,6 +392,7 @@ export function OneOffEmailDialog({
         </div>
 
         <DialogFooter>
+          <Button variant="ghost" onClick={openSaveTemplate} className="sm:mr-auto">Save as template</Button>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button
             onClick={handleSend}
@@ -376,6 +403,12 @@ export function OneOffEmailDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <SaveTemplateDialog
+        open={!!templateContent}
+        onClose={() => setTemplateContent(null)}
+        content={templateContent}
+        onSaved={(t) => setSavedTemplates((prev) => [...prev, t])}
+      />
     </Dialog>
   )
 }

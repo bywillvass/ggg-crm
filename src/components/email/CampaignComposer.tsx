@@ -41,6 +41,7 @@ import {
 import { cn } from "cn"
 import type { Tables, Database } from "@/lib/database.types"
 import { buildStructuredEmail } from "@/lib/email/builder"
+import { loadContent } from "@/lib/email/templates"
 import { FROM_ADDRESSES } from "@/lib/email/from-options"
 
 type ParticipantStatus = Database["public"]["Enums"]["participant_status"]
@@ -129,6 +130,8 @@ export function CampaignComposer({
     return bt
   })
   const [bodyHtml, setBodyHtml] = useState(initialCampaign?.body_html ?? "")
+  // The rich editor only reads its value on mount, so bump this to reload it
+  const [htmlVersion, setHtmlVersion] = useState(0)
   const [attachments, setAttachments] = useState<EmailAttachmentRow[]>(initialAttachments ?? [])
   const [includeRsvp, setIncludeRsvp] = useState(initialCampaign?.include_rsvp ?? false)
   const [saveTemplateName, setSaveTemplateName] = useState("")
@@ -316,10 +319,15 @@ export function CampaignComposer({
     const t = templates.find((x) => x.id === id)
     if (!t) return
     setSubject(t.subject)
-    const fmt = t.format as "plain" | "html" | "builder"
-    setFormat(fmt === "builder" ? "builder" : fmt === "html" ? "html" : "plain")
-    setBodyText(t.body_text ?? "")
-    setBodyHtml(t.body_html ?? "")
+    const c = loadContent(t)
+    setFormat(c.format)
+    setBodyText(c.bodyText)
+    setBodyHtml(c.bodyHtml)
+    setHtmlVersion((v) => v + 1)
+    setBuilderEyebrow(c.builder.eyebrow)
+    setBuilderHeading(c.builder.heading)
+    setBuilderSubheading(c.builder.subheading)
+    setBuilderBody(c.builder.body)
   }
 
   async function persistDraft(): Promise<string | null> {
@@ -858,7 +866,7 @@ export function CampaignComposer({
                 )}
 
                 {format === "html" && (
-                  <TiptapEditor value={bodyHtml} onChange={setBodyHtml} />
+                  <TiptapEditor key={htmlVersion} value={bodyHtml} onChange={setBodyHtml} />
                 )}
 
                 {format === "builder" && (

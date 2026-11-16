@@ -398,6 +398,7 @@ export async function requestMissingDocuments(
           body_text: `${greeting}\n\nPlease upload documents for ${participant.player_name} for ${event.title}:\n\n${uploadUrl}\n\nThis link expires in 30 days.`,
           event_id: eventId,
           player_id: participant.player_id ?? undefined,
+          source: "document_request",
           status: "queued",
         })
       }

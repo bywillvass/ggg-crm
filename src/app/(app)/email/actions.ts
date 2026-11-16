@@ -4,7 +4,7 @@ import { requireAdmin, requireAuth } from "@/lib/auth/role"
 import { createClient } from "@/lib/supabase/server"
 import { serviceClient } from "@/lib/supabase/service"
 import { logActivity } from "@/lib/activity"
-import { processEmailQueue, sendSingleEmail, sendDirectEmail, recalculateCampaignCounts } from "@/lib/email/sender"
+import { processEmailQueue, sendSingleEmail, recalculateCampaignCounts, renderMessagePreview } from "@/lib/email/sender"
 import { FROM_ADDRESSES } from "@/lib/email/from-options"
 import { resolveAudienceServer, type AudienceContact, type AudienceFilter } from "@/lib/email/audience"
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types"
@@ -166,6 +166,7 @@ export async function sendCampaignNow(
   id: string
 ): Promise<{ error: string | null; stats?: { queued: number; sent: number; failed: number; skipped: number } }> {
   await requireAdmin()
+  const user = await requireAuth()
   const supabase = await createClient()
 
   const { data: campaign } = await supabase.from("email_campaigns").select("*").eq("id", id).single()
@@ -194,6 +195,9 @@ export async function sendCampaignNow(
       campaign_id: campaign.id,
       event_id: campaign.event_id,
       player_id: contact.player_id ?? null,
+      to_name: [contact.first_name, contact.last_name].filter(Boolean).join(" ") || null,
+      source: "campaign",
+      sent_by: user.id,
       status: "queued",
     })
     queued++
@@ -264,7 +268,7 @@ export async function sendTestEmail(
   toEmail: string
 ): Promise<{ error: string | null }> {
   await requireAdmin()
-  await requireAuth()
+  const user = await requireAuth()
   const supabase = await createClient()
 
   const { data: campaign } = await supabase
@@ -324,7 +328,10 @@ export async function sendTestEmail(
       body_text: mergeSampleContact(campaign.body_text),
       event_id: campaign.event_id,
       player_id: sample?.player_id ?? null,
-      status: "queued",
+      source: "test",
+      sent_by: user.id,
+      // "sending" keeps the cron queue from picking it up while it's sent below
+      status: "sending",
     })
     .select("id")
     .single()
@@ -437,6 +444,33 @@ export async function saveAsTemplate(
   return { data, error: error?.message ?? null }
 }
 
+// Saves what's in a quick or one-off email as a new template
+export async function saveContentAsTemplate(input: {
+  name: string
+  subject: string
+  format: "plain" | "html"
+  body_html: string | null
+  body_text: string | null
+  category?: string
+}): Promise<{ data: EmailTemplateRow | null; error: string | null }> {
+  await requireAdmin()
+  if (!input.name.trim()) return { data: null, error: "Template name is required" }
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from("email_templates")
+    .insert({
+      name: input.name.trim(),
+      subject: input.subject,
+      format: input.format,
+      body_html: input.body_html,
+      body_text: input.body_text,
+      category: input.category ?? "general",
+    })
+    .select()
+    .single()
+  return { data, error: error?.message ?? null }
+}
+
 export async function deleteTemplate(id: string): Promise<{ error: string | null }> {
   await requireAdmin()
   const supabase = await createClient()
@@ -479,7 +513,9 @@ export async function sendOneOffEmail(input: {
       event_id: input.eventId ?? null,
       player_id: input.playerId ?? null,
       invoice_id: input.invoiceId ?? null,
-      status: "queued",
+      source: "one_off",
+      sent_by: user.id,
+      status: "sending",
     })
     .select("id")
     .single()
@@ -626,30 +662,20 @@ export async function sendQuickEmail(input: {
       playerId = link?.player_id ?? null
     }
 
-    if (!contactId) {
-      const res = await sendDirectEmail({
-        to: email,
-        name: r.name,
-        subject: input.subject,
-        bodyHtml: input.bodyHtml,
-        bodyText: input.bodyText,
-        overrides,
-      })
-      if (res.ok) sent++
-      else failed.push({ email, error: res.error ?? "Failed to send" })
-      continue
-    }
-
+    // Addresses outside the CRM are logged with no contact, so they still show in the sent log
     const { data: inserted } = await serviceClient
       .from("email_messages")
       .insert({
         contact_id: contactId,
         to_email: email,
+        to_name: r.name?.trim() || null,
         subject: input.subject,
         body_html: input.bodyHtml ?? null,
         body_text: input.bodyText ?? null,
         player_id: playerId,
-        status: "queued",
+        source: "quick",
+        sent_by: user.id,
+        status: "sending",
       })
       .select("id")
       .single()
@@ -663,6 +689,7 @@ export async function sendQuickEmail(input: {
       continue
     }
     sent++
+    if (!contactId) continue
     await logActivity({
       type: "email_sent",
       contact_id: contactId,
@@ -673,6 +700,73 @@ export async function sendQuickEmail(input: {
   }
 
   return { sent, failed }
+}
+
+// ─── Sent log (every email sent through the CRM) ─────────────────────────────
+
+export type EmailSource = "campaign" | "quick" | "one_off" | "test" | "reminder" | "document_request"
+
+export type SentLogRow = Pick<
+  EmailMessageRow,
+  "id" | "to_email" | "to_name" | "subject" | "status" | "source" | "from_address" | "sent_at" | "created_at" | "opened_at" | "error" | "contact_id" | "campaign_id"
+> & {
+  contacts: { first_name: string | null; last_name: string | null } | null
+  email_campaigns: { name: string } | null
+  profiles: { full_name: string | null } | null
+}
+
+export async function listSentEmails(opts: {
+  page?: number
+  pageSize?: number
+  search?: string
+  source?: EmailSource | ""
+  campaignId?: string
+}): Promise<{ rows: SentLogRow[]; total: number }> {
+  await requireAdmin()
+  const supabase = await createClient()
+  const pageSize = Math.min(opts.pageSize ?? 50, 200)
+  const page = Math.max(1, opts.page ?? 1)
+
+  let req = supabase
+    .from("email_messages")
+    .select(
+      "id, to_email, to_name, subject, status, source, from_address, sent_at, created_at, opened_at, error, contact_id, campaign_id, contacts(first_name, last_name), email_campaigns(name), profiles:sent_by(full_name)",
+      { count: "exact" }
+    )
+  if (opts.source) req = req.eq("source", opts.source)
+  if (opts.campaignId) req = req.eq("campaign_id", opts.campaignId)
+  const q = (opts.search ?? "").replace(/[%,()*]/g, " ").trim()
+  if (q) req = req.or(`to_email.ilike.%${q}%,to_name.ilike.%${q}%,subject.ilike.%${q}%`)
+
+  const { data, count } = await req
+    .order("created_at", { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1)
+
+  return { rows: (data ?? []) as unknown as SentLogRow[], total: count ?? 0 }
+}
+
+// The email exactly as the recipient got it (merge fields filled, branding applied)
+export async function getSentEmailPreview(
+  messageId: string
+): Promise<{ subject: string; html: string; from: string; replyTo: string | null } | null> {
+  await requireAdmin()
+  return renderMessagePreview(messageId)
+}
+
+// The campaign content as written, rendered with sample data from its first recipient
+export async function getCampaignPreview(
+  campaignId: string
+): Promise<{ subject: string; html: string; from: string; replyTo: string | null } | null> {
+  await requireAdmin()
+  const { data: first } = await serviceClient
+    .from("email_messages")
+    .select("id")
+    .eq("campaign_id", campaignId)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (!first) return null
+  return renderMessagePreview(first.id)
 }
 
 // ─── Contact-specific ─────────────────────────────────────────────────────────

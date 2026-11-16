@@ -25,6 +25,8 @@ import {
 } from "@/app/(app)/email/actions"
 import { buildStructuredEmail } from "@/lib/email/builder"
 import { FROM_ADDRESSES, DEFAULT_FROM } from "@/lib/email/from-options"
+import { loadContent, saveContent } from "@/lib/email/templates"
+import { SaveTemplateDialog, type TemplateContent } from "./SaveTemplateDialog"
 
 type Format = "plain" | "html" | "builder"
 
@@ -71,6 +73,9 @@ export function QuickEmailDialog({
   const [builderSubheading, setBuilderSubheading] = useState("")
   const [builderBody, setBuilderBody] = useState("")
   const [sending, setSending] = useState(false)
+  const [savedTemplates, setSavedTemplates] = useState<EmailTemplateRow[]>([])
+  const [templateContent, setTemplateContent] = useState<TemplateContent | null>(null)
+  const allTemplates = [...templates, ...savedTemplates.filter((t) => !templates.some((x) => x.id === t.id))]
 
   const subjectRef = useRef<HTMLInputElement | null>(null)
   const bodyTextRef = useRef<HTMLTextAreaElement | null>(null)
@@ -139,30 +144,35 @@ export function QuickEmailDialog({
   }
 
   function applyTemplate(id: string) {
-    const t = templates.find((x) => x.id === id)
+    const t = allTemplates.find((x) => x.id === id)
     if (!t) return
     setSubject(t.subject ?? "")
-    const bt = t.body_text ?? ""
-    // Builder templates keep their raw fields in body_text
-    if (bt.startsWith("__builder__:")) {
-      try {
-        const b = JSON.parse(bt.slice("__builder__:".length))
-        setBuilderEyebrow(b.eyebrow ?? "")
-        setBuilderHeading(b.heading ?? "")
-        setBuilderSubheading(b.subheading ?? "")
-        setBuilderBody(b.body ?? "")
-        setFormat("builder")
-        return
-      } catch { /* fall through */ }
-    }
-    if (t.format === "html" && t.body_html) {
-      setBodyHtml(t.body_html)
-      setHtmlVersion((v) => v + 1)
-      setFormat("html")
-    } else {
-      setBodyText(bt)
-      setFormat("plain")
-    }
+    const c = loadContent(t)
+    setFormat(c.format)
+    setBodyText(c.bodyText)
+    setBodyHtml(c.bodyHtml)
+    setHtmlVersion((v) => v + 1)
+    setBuilderEyebrow(c.builder.eyebrow)
+    setBuilderHeading(c.builder.heading)
+    setBuilderSubheading(c.builder.subheading)
+    setBuilderBody(c.builder.body)
+  }
+
+  function openSaveTemplate() {
+    if (!subject.trim()) return toast.error("Add a subject first")
+    const empty = format === "plain" ? !bodyText.trim()
+      : format === "html" ? !bodyHtml.replace(/<[^>]+>/g, "").trim()
+      : !builderHeading.trim() && !builderBody.trim()
+    if (empty) return toast.error("Write a message first")
+    setTemplateContent({
+      subject: subject.trim(),
+      ...saveContent({
+        format,
+        bodyText,
+        bodyHtml,
+        builder: { eyebrow: builderEyebrow, heading: builderHeading, subheading: builderSubheading, body: builderBody },
+      }),
+    })
   }
 
   function reset() {
@@ -314,7 +324,7 @@ export function QuickEmailDialog({
             <p className="text-xs text-gray-400">Each person gets their own email. Tip: type <span className="font-mono">Name &lt;email&gt;</span> so their name fills in.</p>
             {outsideCrm.length > 0 && (
               <p className="text-xs text-gray-500">
-                {outsideCrm.length} address{outsideCrm.length === 1 ? " isn't" : "es aren't"} in the CRM. If an address matches a contact it&apos;s sent as that contact, otherwise it&apos;s sent directly and won&apos;t show in any history.
+                {outsideCrm.length} address{outsideCrm.length === 1 ? " isn't" : "es aren't"} in the CRM. If an address matches a contact it&apos;s sent as that contact, otherwise it&apos;s sent directly and only shows in the sent log.
               </p>
             )}
             {recipients.some((r) => r.unsubscribed) && (
@@ -345,12 +355,12 @@ export function QuickEmailDialog({
             </div>
           </div>
 
-          {templates.length > 0 && (
+          {allTemplates.length > 0 && (
             <div className="space-y-1">
               <Label>Template</Label>
               <Select value="" onChange={(e) => applyTemplate(e.target.value)}>
                 <option value="">Select a template…</option>
-                {templates.map((t) => (
+                {allTemplates.map((t) => (
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </Select>
@@ -476,6 +486,7 @@ export function QuickEmailDialog({
         </div>
 
         <DialogFooter>
+          <Button variant="ghost" onClick={openSaveTemplate} className="sm:mr-auto">Save as template</Button>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button
             onClick={handleSend}
@@ -488,6 +499,12 @@ export function QuickEmailDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <SaveTemplateDialog
+        open={!!templateContent}
+        onClose={() => setTemplateContent(null)}
+        content={templateContent}
+        onSaved={(t) => setSavedTemplates((prev) => [...prev, t])}
+      />
     </Dialog>
   )
 }

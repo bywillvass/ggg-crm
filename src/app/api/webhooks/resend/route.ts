@@ -88,7 +88,8 @@ export async function POST(request: NextRequest) {
         .from("email_messages")
         .update({ status, bounced_at: now, updated_at: now })
         .eq("id", message.id)
-      // Unsubscribe contact
+      // Unsubscribe contact (quick emails to addresses outside the CRM have none)
+      if (!message.contact_id) break
       await serviceClient
         .from("contacts")
         .update({ unsubscribed_at: now, updated_at: now })

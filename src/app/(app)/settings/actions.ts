@@ -125,11 +125,11 @@ export async function getEmailTemplates(): Promise<Tables<"email_templates">[]> 
 
 export async function createEmailTemplate(
   input: TablesInsert<"email_templates">
-): Promise<{ error: string | null }> {
+): Promise<{ data: Tables<"email_templates"> | null; error: string | null }> {
   await requireAdmin()
   const supabase = await createClient()
-  const { error } = await supabase.from("email_templates").insert(input)
-  return { error: error?.message ?? null }
+  const { data, error } = await supabase.from("email_templates").insert(input).select().single()
+  return { data, error: error?.message ?? null }
 }
 
 export async function updateEmailTemplate(

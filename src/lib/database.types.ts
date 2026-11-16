@@ -576,20 +576,25 @@ export type Database = {
           bounced_at: string | null
           campaign_id: string | null
           clicked_at: string | null
-          contact_id: string
+          contact_id: string | null
           created_at: string
           delivered_at: string | null
           error: string | null
           event_id: string | null
+          from_address: string | null
           id: string
           invoice_id: string | null
           opened_at: string | null
           player_id: string | null
+          reply_to: string | null
           resend_id: string | null
           sent_at: string | null
+          sent_by: string | null
+          source: string
           status: Database["public"]["Enums"]["message_status"]
           subject: string
           to_email: string
+          to_name: string | null
           updated_at: string | null
         }
         Insert: {
@@ -598,20 +603,25 @@ export type Database = {
           bounced_at?: string | null
           campaign_id?: string | null
           clicked_at?: string | null
-          contact_id: string
+          contact_id?: string | null
           created_at?: string
           delivered_at?: string | null
           error?: string | null
           event_id?: string | null
+          from_address?: string | null
           id?: string
           invoice_id?: string | null
           opened_at?: string | null
           player_id?: string | null
+          reply_to?: string | null
           resend_id?: string | null
           sent_at?: string | null
+          sent_by?: string | null
+          source?: string
           status?: Database["public"]["Enums"]["message_status"]
           subject: string
           to_email: string
+          to_name?: string | null
           updated_at?: string | null
         }
         Update: {
@@ -620,20 +630,25 @@ export type Database = {
           bounced_at?: string | null
           campaign_id?: string | null
           clicked_at?: string | null
-          contact_id?: string
+          contact_id?: string | null
           created_at?: string
           delivered_at?: string | null
           error?: string | null
           event_id?: string | null
+          from_address?: string | null
           id?: string
           invoice_id?: string | null
           opened_at?: string | null
           player_id?: string | null
+          reply_to?: string | null
           resend_id?: string | null
           sent_at?: string | null
+          sent_by?: string | null
+          source?: string
           status?: Database["public"]["Enums"]["message_status"]
           subject?: string
           to_email?: string
+          to_name?: string | null
           updated_at?: string | null
         }
         Relationships: [
@@ -649,6 +664,13 @@ export type Database = {
             columns: ["contact_id"]
             isOneToOne: false
             referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_messages_sent_by_fkey"
+            columns: ["sent_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {

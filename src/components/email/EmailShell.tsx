@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { CampaignComposer } from "./CampaignComposer"
 import { QuickEmailDialog } from "./QuickEmailDialog"
+import { SentLog } from "./SentLog"
+import { cn } from "cn"
 import {
   duplicateCampaign,
   deleteCampaign,
@@ -44,6 +46,7 @@ export function EmailShell({
   const [showComposer, setShowComposer] = useState(false)
   const [showQuick, setShowQuick] = useState(false)
   const [subSearch, setSubSearch] = useState("")
+  const [tab, setTab] = useState<"campaigns" | "sent" | "subscribers">("campaigns")
 
   const activeSubscribers = subscribers.filter((s) => !s.unsubscribed_at)
   const filteredSubscribers = subSearch
@@ -99,6 +102,29 @@ export function EmailShell({
         </div>
       </div>
 
+      <div className="flex gap-1 border-b">
+        {([
+          ["campaigns", "Campaigns"],
+          ["sent", "Sent log"],
+          ["subscribers", "Subscribers"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={cn(
+              "px-3 py-2 text-sm font-medium border-b-2 -mb-px",
+              tab === key ? "border-[#C9A227] text-[#0C0F4C]" : "border-transparent text-gray-500 hover:text-gray-700"
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "sent" && <SentLog />}
+
+      {tab === "campaigns" && (
       <div className="rounded-lg border bg-white overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -178,7 +204,10 @@ export function EmailShell({
         </table>
       </div>
 
+      )}
+
       {/* Subscribers */}
+      {tab === "subscribers" && (
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -241,6 +270,8 @@ export function EmailShell({
           </table>
         </div>
       </div>
+
+      )}
 
       <QuickEmailDialog open={showQuick} onClose={() => setShowQuick(false)} templates={templates} />
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod/v4"
@@ -25,15 +25,20 @@ import {
 } from "@/app/(app)/settings/actions"
 import type { Tables } from "@/lib/database.types"
 import { PlusIcon, PencilIcon, Trash2Icon } from "lucide-react"
+import { loadContent, saveContent, renderBuilder, MERGE_FIELDS, TEMPLATE_CATEGORIES } from "@/lib/email/templates"
 
 const schema = z.object({
   name: z.string().min(1, "Name is required"),
   subject: z.string().min(1, "Subject is required"),
   category: z.string().min(1, "Category is required"),
-  format: z.enum(["plain", "html"]),
+  format: z.enum(["plain", "html", "builder"]),
   body_text: z.string().optional().nullable(),
   body_html: z.string().optional().nullable(),
-})
+  eyebrow: z.string().optional().nullable(),
+  heading: z.string().optional().nullable(),
+  subheading: z.string().optional().nullable(),
+  builder_body: z.string().optional().nullable(),
+}).refine((v) => v.format !== "builder" || !!v.heading?.trim(), { path: ["heading"], message: "Heading is required" })
 
 type FormValues = z.infer<typeof schema>
 type Template = Tables<"email_templates">
@@ -53,6 +58,10 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
       format: "plain",
       body_text: "",
       body_html: "",
+      eyebrow: "",
+      heading: "",
+      subheading: "",
+      builder_body: "",
     },
   })
 
@@ -62,29 +71,33 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
 
   function openEdit(t: Template) {
     setEditTarget(t)
+    const c = loadContent(t)
     editForm.reset({
       name: t.name,
       subject: t.subject,
       category: t.category,
-      format: t.format,
-      body_text: t.body_text ?? "",
-      body_html: t.body_html ?? "",
+      format: c.format,
+      body_text: c.bodyText,
+      body_html: c.bodyHtml,
+      eyebrow: c.builder.eyebrow,
+      heading: c.builder.heading,
+      subheading: c.builder.subheading,
+      builder_body: c.builder.body,
     })
     setEditOpen(true)
   }
 
   async function onAdd(values: FormValues) {
-    const { error } = await createEmailTemplate({
+    const { data, error } = await createEmailTemplate({
       name: values.name,
       subject: values.subject,
       category: values.category,
-      format: values.format,
-      body_text: values.body_text || null,
-      body_html: values.body_html || null,
+      ...toColumns(values),
     })
     if (error) {
       toast.error(error)
     } else {
+      if (data) setTemplates((prev) => [...prev, data].sort((x, y) => x.name.localeCompare(y.name)))
       toast.success("Template created")
       addForm.reset()
       setAddOpen(false)
@@ -93,13 +106,12 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
 
   async function onEdit(values: FormValues) {
     if (!editTarget) return
+    const columns = toColumns(values)
     const { error } = await updateEmailTemplate(editTarget.id, {
       name: values.name,
       subject: values.subject,
       category: values.category,
-      format: values.format,
-      body_text: values.body_text || null,
-      body_html: values.body_html || null,
+      ...columns,
     })
     if (error) {
       toast.error(error)
@@ -112,9 +124,7 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
                 name: values.name,
                 subject: values.subject,
                 category: values.category,
-                format: values.format,
-                body_text: values.body_text ?? null,
-                body_html: values.body_html ?? null,
+                ...columns,
               }
             : t
         )
@@ -177,7 +187,9 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
                 <td className="px-3 py-2">
                   <Badge variant="secondary">{t.category}</Badge>
                 </td>
-                <td className="px-3 py-2 text-muted-foreground">{t.format}</td>
+                <td className="px-3 py-2 text-muted-foreground">
+                  {loadContent(t).format === "builder" ? "builder" : t.format}
+                </td>
                 <td className="px-3 py-2 text-right flex justify-end gap-1">
                   <Button
                     variant="ghost"
@@ -204,7 +216,7 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
 
       {/* Add dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add email template</DialogTitle>
           </DialogHeader>
@@ -221,7 +233,7 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
 
       {/* Edit dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit email template</DialogTitle>
           </DialogHeader>
@@ -239,11 +251,71 @@ export function TemplatesSettings({ templates: initial }: { templates: Template[
   )
 }
 
+function toColumns(v: FormValues) {
+  const c = saveContent({
+    format: v.format,
+    bodyText: v.body_text ?? "",
+    bodyHtml: v.body_html ?? "",
+    builder: {
+      eyebrow: v.eyebrow ?? "",
+      heading: v.heading ?? "",
+      subheading: v.subheading ?? "",
+      body: v.builder_body ?? "",
+    },
+  })
+  return { format: c.format, body_text: c.body_text || null, body_html: c.body_html || null }
+}
+
+type TextField = "subject" | "body_text" | "body_html" | "eyebrow" | "heading" | "subheading" | "builder_body"
+
 function TemplateFormFields({ form }: { form: ReturnType<typeof useForm<FormValues>> }) {
-  const { register, watch, formState: { errors } } = form
+  const { register, watch, setValue, getValues, formState: { errors } } = form
   const format = watch("format")
+  const [showPreview, setShowPreview] = useState(false)
+  // Last text field the cursor was in, so merge tags go where you're typing
+  const active = useRef<{ name: TextField; el: HTMLInputElement | HTMLTextAreaElement } | null>(null)
+  // Fields opt in with data-field; focus bubbles up to the wrapper below
+  const track = (name: TextField) => ({ "data-field": name })
+
+  function insertMergeField(tag: string) {
+    const token = `{{${tag}}}`
+    const fallback: TextField = format === "builder" ? "builder_body" : format === "html" ? "body_html" : "body_text"
+    // Ignore a field that's gone because the format changed
+    const target = active.current?.el.isConnected ? active.current : null
+    const name = target?.name ?? fallback
+    const current = (getValues(name) ?? "") as string
+    const start = target?.el.selectionStart ?? current.length
+    const end = target?.el.selectionEnd ?? current.length
+    setValue(name, current.slice(0, start) + token + current.slice(end), { shouldDirty: true })
+    if (target) {
+      setTimeout(() => {
+        target.el.focus()
+        target.el.setSelectionRange(start + token.length, start + token.length)
+      }, 0)
+    }
+  }
+
+  const values = watch()
+  const previewHtml = format === "builder"
+    ? renderBuilder({
+        eyebrow: values.eyebrow ?? "",
+        heading: values.heading ?? "",
+        subheading: values.subheading ?? "",
+        body: values.builder_body ?? "",
+      })
+    : format === "html"
+      ? values.body_html ?? ""
+      : null
+
   return (
-    <>
+    <div
+      className="space-y-3"
+      onFocus={(e) => {
+        const el = e.target as HTMLInputElement | HTMLTextAreaElement
+        const name = el.dataset?.field as TextField | undefined
+        if (name) active.current = { name, el }
+      }}
+    >
       <div className="space-y-1">
         <Label htmlFor="tpl_name">Name</Label>
         <Input id="tpl_name" {...register("name")} autoFocus />
@@ -251,17 +323,14 @@ function TemplateFormFields({ form }: { form: ReturnType<typeof useForm<FormValu
           <p className="text-xs text-destructive">{errors.name.message}</p>
         )}
       </div>
-      <div className="space-y-1">
-        <Label htmlFor="tpl_subject">Subject</Label>
-        <Input id="tpl_subject" {...register("subject")} />
-        {errors.subject && (
-          <p className="text-xs text-destructive">{errors.subject.message}</p>
-        )}
-      </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
           <Label htmlFor="tpl_category">Category</Label>
-          <Input id="tpl_category" {...register("category")} placeholder="e.g. event, invoice" />
+          <Select id="tpl_category" {...register("category")}>
+            {TEMPLATE_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
+            ))}
+          </Select>
           {errors.category && (
             <p className="text-xs text-destructive">{errors.category.message}</p>
           )}
@@ -271,13 +340,42 @@ function TemplateFormFields({ form }: { form: ReturnType<typeof useForm<FormValu
           <Select id="tpl_format" {...register("format")}>
             <option value="plain">Plain text</option>
             <option value="html">HTML</option>
+            <option value="builder">Builder (branded)</option>
           </Select>
         </div>
       </div>
+      <div className="space-y-1">
+        <Label htmlFor="tpl_subject">Subject</Label>
+        <Input id="tpl_subject" {...register("subject")} {...track("subject")} />
+        {errors.subject && (
+          <p className="text-xs text-destructive">{errors.subject.message}</p>
+        )}
+      </div>
+
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground mr-1">Insert:</span>
+          {MERGE_FIELDS.map((f) => (
+            <button
+              key={f.tag}
+              type="button"
+              title={f.label}
+              onClick={() => insertMergeField(f.tag)}
+              className="text-xs rounded-md bg-gray-100 hover:bg-gray-200 px-2 py-0.5 text-gray-700"
+            >
+              {`{{${f.tag}}}`}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Click into the subject or a message field, then click a tag. Tags are filled in for each recipient when the email is sent. Event tags only fill in for emails linked to an event.
+        </p>
+      </div>
+
       {format === "plain" && (
         <div className="space-y-1">
           <Label htmlFor="tpl_body_text">Body (plain text)</Label>
-          <Textarea id="tpl_body_text" rows={6} {...register("body_text")} />
+          <Textarea id="tpl_body_text" rows={8} {...register("body_text")} {...track("body_text")} placeholder="Hi {{contact_first_name}}," />
         </div>
       )}
       {format === "html" && (
@@ -285,12 +383,59 @@ function TemplateFormFields({ form }: { form: ReturnType<typeof useForm<FormValu
           <Label htmlFor="tpl_body_html">Body (HTML)</Label>
           <Textarea
             id="tpl_body_html"
-            rows={6}
+            rows={8}
             {...register("body_html")}
+            {...track("body_html")}
             className="font-mono text-xs"
           />
         </div>
       )}
-    </>
+      {format === "builder" && (
+        <div className="space-y-3 rounded-lg border bg-gray-50 p-4">
+          <p className="text-xs text-gray-500">Builds a branded Ginga Global Group email.</p>
+          <div className="space-y-1">
+            <Label htmlFor="tpl_eyebrow">Eyebrow <span className="text-gray-400 font-normal">(optional, small label above heading)</span></Label>
+            <Input id="tpl_eyebrow" {...register("eyebrow")} {...track("eyebrow")} placeholder="e.g. Trial reminder" />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="tpl_heading">Heading</Label>
+            <Input id="tpl_heading" {...register("heading")} {...track("heading")} placeholder="e.g. {{player_first_name}}'s trial is coming up!" />
+            {errors.heading && (
+              <p className="text-xs text-destructive">{errors.heading.message}</p>
+            )}
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="tpl_subheading">Subheading <span className="text-gray-400 font-normal">(optional)</span></Label>
+            <Input id="tpl_subheading" {...register("subheading")} {...track("subheading")} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="tpl_builder_body">Body <span className="text-gray-400 font-normal">(blank line = new paragraph)</span></Label>
+            <Textarea
+              id="tpl_builder_body"
+              rows={8}
+              {...register("builder_body")}
+              {...track("builder_body")}
+              placeholder={`Hi {{contact_first_name}},\n\nWe're excited to have {{player_first_name}} join us...`}
+            />
+          </div>
+        </div>
+      )}
+
+      {previewHtml !== null && (
+        <div className="space-y-1">
+          <button type="button" onClick={() => setShowPreview((v) => !v)} className="text-xs font-medium text-[#0C0F4C] hover:underline">
+            {showPreview ? "Hide preview" : "Show preview"}
+          </button>
+          {showPreview && (
+            <iframe
+              title="Template preview"
+              srcDoc={previewHtml}
+              sandbox=""
+              className="w-full h-[480px] rounded-md border bg-white"
+            />
+          )}
+        </div>
+      )}
+    </div>
   )
 }

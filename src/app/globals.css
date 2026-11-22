@@ -128,3 +128,88 @@
     @apply font-sans;
   }
 }
+/* ─── Blog post content ──────────────────────────────────────────────────────
+   Mirrors .post-content in ginga-global-group-site/css/style.css so the
+   editor shows posts the way they appear on the website. Keep them in sync. */
+.blog-content {
+  --bc-navy: #0C0F4C;
+  --bc-gold: #C6A15B;
+  --bc-ink: rgba(18, 20, 46, 0.8);
+  font-family: var(--font-sans);
+  font-size: 1.02rem;
+  line-height: 1.7;
+  color: var(--bc-ink);
+}
+.blog-content > * + * { margin-top: 18px; }
+.blog-content h2,
+.blog-content h3,
+.blog-content .headline {
+  font-family: var(--font-heading);
+  color: var(--bc-navy);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.blog-content h2 { font-size: 1.75rem; line-height: 1.15; margin-top: 44px; }
+.blog-content h3 { font-size: 1.25rem; line-height: 1.25; margin-top: 32px; }
+.blog-content h2 + *, .blog-content h3 + * { margin-top: 12px; }
+.blog-content .headline { font-size: 2.15rem; line-height: 1.1; margin-top: 10px; }
+.blog-content .kicker {
+  font-family: var(--font-heading);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--bc-gold);
+}
+.blog-content .kicker + .headline { margin-top: 8px; }
+.blog-content .lead { font-size: 1.2rem; line-height: 1.6; font-weight: 500; color: var(--bc-navy); }
+.blog-content strong { font-weight: 700; color: var(--bc-navy); }
+.blog-content a { color: var(--bc-navy); text-decoration: underline; text-decoration-color: var(--bc-gold); text-underline-offset: 3px; }
+.blog-content blockquote {
+  border-left: 3px solid var(--bc-gold);
+  padding: 4px 0 4px 22px;
+  font-family: var(--font-heading);
+  font-size: 1.2rem;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--bc-navy);
+}
+.blog-content blockquote p + p { margin-top: 10px; }
+.blog-content .info {
+  background: rgba(12, 15, 76, 0.04);
+  border-left: 3px solid var(--bc-gold);
+  padding: 2px 20px;
+  color: var(--bc-navy);
+}
+.blog-content :not(.info) + .info { padding-top: 16px; }
+.blog-content .info:not(:has(+ .info)) { padding-bottom: 16px; }
+.blog-content .info + .info { margin-top: 0; }
+.blog-content .ends {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 40px;
+  font-family: var(--font-heading);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--bc-navy);
+}
+.blog-content .ends::before, .blog-content .ends::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(12, 15, 76, 0.15);
+}
+.blog-content .ends + * { margin-top: 32px; }
+.blog-content .boilerplate { font-size: 0.92rem; color: rgba(18, 20, 46, 0.65); }
+.blog-content .small { font-size: 0.85rem; color: rgba(18, 20, 46, 0.6); }
+.blog-content ul, .blog-content ol { padding-left: 1.4rem; }
+.blog-content ul { list-style: disc; }
+.blog-content ol { list-style: decimal; }
+.blog-content li + li { margin-top: 6px; }
+.blog-content li::marker { color: var(--bc-gold); }
+.blog-content hr { border: 0; height: 1px; background: rgba(12, 15, 76, 0.15); margin: 36px 0; }
+.blog-content img { max-width: 100%; height: auto; border-radius: 4px; }
+.blog-content > :first-child { margin-top: 0; }

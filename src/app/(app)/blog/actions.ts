@@ -223,7 +223,9 @@ export async function syncBlogToGitHub(): Promise<{ ok: boolean; error?: string 
       Tag: post.category,
       Series: post.tags?.[0] ?? "",
       Excerpt: post.excerpt ?? "",
+      // Content stays plain text for older readers; the site renders ContentHtml when present
       Content: htmlToPlainText(post.body_html ?? ""),
+      ContentHtml: post.body_html ?? "",
       Image: post.cover_image_url ?? "",
       ImagePosition: "",
       Published: true,
@@ -335,6 +337,7 @@ export async function importFromGitHub(): Promise<{ imported: number; skipped: n
       Series: string
       Excerpt: string
       Content: string
+      ContentHtml?: string
       Image: string
       ImagePosition: string
       Published: boolean
@@ -358,7 +361,7 @@ export async function importFromGitHub(): Promise<{ imported: number; skipped: n
         category: post.Tag || "News",
         tags: post.Series ? [post.Series] : [],
         excerpt: post.Excerpt || null,
-        body_html: plainTextToHtml(post.Content),
+        body_html: post.ContentHtml || plainTextToHtml(post.Content),
         cover_image_url: post.Image || null,
         published: true,
         published_at: post.Date ? new Date(post.Date).toISOString() : new Date().toISOString(),

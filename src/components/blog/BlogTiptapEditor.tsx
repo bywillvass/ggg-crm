@@ -5,7 +5,7 @@ import StarterKit from "@tiptap/starter-kit"
 import Image from "@tiptap/extension-image"
 import Placeholder from "@tiptap/extension-placeholder"
 import { Fragment } from "@tiptap/pm/model"
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { toast } from "sonner"
 import {
   Bold as BoldIcon,
@@ -17,6 +17,8 @@ import {
   RemoveFormatting,
   Sparkles,
   Loader2,
+  ClipboardCopy,
+  ClipboardPaste,
 } from "lucide-react"
 import { cn } from "cn"
 import {
@@ -25,7 +27,7 @@ import {
   BLOG_POST_TEMPLATE,
   type ParagraphStyle,
 } from "./blockStyles"
-import { extractUnits, unitsToPrompt, buildHtml, type FormatPlan } from "./autoFormat"
+import { extractUnits, unitsToPrompt, buildHtml, buildChatPrompt, parsePlan, type FormatPlan } from "./autoFormat"
 
 type StyleItem = {
   key: string
@@ -242,6 +244,18 @@ export function BlogTiptapEditor({
   const [mode, setMode] = useState<"editor" | "raw">("editor")
   const [rawHtml, setRawHtml] = useState(value)
   const [formatting, setFormatting] = useState(false)
+  const [aiEnabled, setAiEnabled] = useState(false)
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [reply, setReply] = useState("")
+  // Lines as they were when copied for Claude, so the reply's numbers still match
+  const copiedLinesRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    fetch("/api/blog/format")
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((d: { enabled?: boolean }) => setAiEnabled(!!d.enabled))
+      .catch(() => {})
+  }, [])
   const fileRef = useRef<HTMLInputElement | null>(null)
 
   const openFilePicker = () => {
@@ -297,6 +311,41 @@ export function BlogTiptapEditor({
     if (!editor.isEmpty && !window.confirm("Replace the current post body with this template?")) return
     editor.commands.setContent(html, { emitUpdate: true })
     editor.commands.focus("start")
+  }
+
+  async function copyForClaude() {
+    if (!editor || editor.isEmpty) {
+      toast.error("Paste the post in first")
+      return
+    }
+    const lines = unitsToPrompt(extractUnits(editor.getHTML()))
+    try {
+      await navigator.clipboard.writeText(buildChatPrompt(lines))
+      copiedLinesRef.current = lines
+      setPasteOpen(true)
+      toast.success("Copied. Paste it into a Claude chat, then paste Claude's answer back here.")
+    } catch {
+      toast.error("Couldn't copy to the clipboard")
+    }
+  }
+
+  function applyClaudeReply() {
+    if (!editor) return
+    const plan = parsePlan(reply)
+    if (!plan) {
+      toast.error("Couldn't read that. Copy Claude's whole answer and paste it here.")
+      return
+    }
+    const units = extractUnits(editor.getHTML())
+    if (copiedLinesRef.current !== null && unitsToPrompt(units) !== copiedLinesRef.current) {
+      toast.error("The post changed since you copied it. Click Copy for Claude again.")
+      return
+    }
+    editor.chain().focus().setContent(buildHtml(units, plan)).run()
+    setReply("")
+    setPasteOpen(false)
+    copiedLinesRef.current = null
+    toast.success("Formatted. Check it over, or press Undo to go back.")
   }
 
   async function autoFormat() {
@@ -463,18 +512,64 @@ export function BlogTiptapEditor({
           {editor && (
             <aside className="w-52 shrink-0 border-l bg-gray-50/70 p-3 space-y-4">
               <div className="sticky top-3 space-y-4">
-                <div className="space-y-1">
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Format with Claude</p>
+                  {aiEnabled && (
+                    <button
+                      type="button"
+                      onClick={autoFormat}
+                      disabled={formatting}
+                      title="Let AI apply the styles. Wording is never changed."
+                      className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-semibold bg-[#0C0F4C] text-white hover:bg-[#0C0F4C]/90 disabled:opacity-60 transition-colors"
+                    >
+                      {formatting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                      {formatting ? "Formatting…" : "Auto-format"}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={autoFormat}
-                    disabled={formatting}
-                    title="Paste the whole post, then let AI apply the styles. Wording is never changed."
-                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-semibold bg-[#0C0F4C] text-white hover:bg-[#0C0F4C]/90 disabled:opacity-60 transition-colors"
+                    onClick={copyForClaude}
+                    title="Copies the post with instructions. Paste it into a chat on claude.ai."
+                    className={cn(
+                      "w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-semibold transition-colors",
+                      aiEnabled
+                        ? "bg-white border border-gray-200 text-gray-700 hover:border-navy/40"
+                        : "bg-[#0C0F4C] text-white hover:bg-[#0C0F4C]/90"
+                    )}
                   >
-                    {formatting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    {formatting ? "Formatting…" : "Auto-format"}
+                    <ClipboardCopy className="h-3.5 w-3.5" />
+                    1. Copy for Claude
                   </button>
-                  <p className="text-[10px] leading-snug text-gray-400">Paste the whole post, then click. Your words stay exactly the same.</p>
+                  <button
+                    type="button"
+                    onClick={() => setPasteOpen((o) => !o)}
+                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-semibold bg-white border border-gray-200 text-gray-700 hover:border-navy/40 transition-colors"
+                  >
+                    <ClipboardPaste className="h-3.5 w-3.5" />
+                    2. Paste Claude&apos;s answer
+                  </button>
+                  {pasteOpen && (
+                    <div className="space-y-1.5">
+                      <textarea
+                        value={reply}
+                        onChange={(e) => setReply(e.target.value)}
+                        rows={5}
+                        placeholder="Paste Claude's whole answer here"
+                        className="w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-[11px] font-mono resize-none focus:outline-none focus:ring-2 focus:ring-[#0C0F4C]/20 focus:border-[#0C0F4C]"
+                      />
+                      <button
+                        type="button"
+                        onClick={applyClaudeReply}
+                        disabled={!reply.trim()}
+                        className="w-full px-2.5 py-1.5 rounded-md text-xs font-semibold bg-[#0C0F4C] text-white hover:bg-[#0C0F4C]/90 disabled:opacity-50 transition-colors"
+                      >
+                        Apply formatting
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-[10px] leading-snug text-gray-400">
+                    Paste the whole post first. Claude only picks the styles, so your words stay exactly the same.
+                  </p>
                 </div>
 
                 {STYLE_GROUPS.map((group) => (

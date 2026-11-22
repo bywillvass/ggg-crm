@@ -20,6 +20,64 @@ export const AUTO_STYLES = [
 ] as const
 export type AutoStyle = (typeof AUTO_STYLES)[number]
 
+export const FORMAT_INSTRUCTIONS = `You lay out blog posts and media releases for Ginga Global Group, an Australian football (soccer) organisation. You decide structure only. You never rewrite, add or remove words.
+
+You receive the post as numbered lines: "<number> [<current tag>] <text>". The text is often pasted from a PDF or Word document, so one paragraph may be split across several lines mid-sentence, and the current tags are often wrong (for example a heading pasted as a bullet point, or every line a separate paragraph).
+
+Return blocks in reading order. Each block lists the line numbers that form it (consecutive lines of one paragraph go in the same block) and one style:
+- kicker: small label line above a headline, e.g. "MEDIA RELEASE | FOR IMMEDIATE RELEASE | 20th November 2026"
+- headline: the main headline of a media release, near the top (at most one)
+- lead: the opening paragraph that summarises the story (usually the first body paragraph; at most one)
+- body: normal paragraph
+- heading: a section heading (short line, no full stop, introduces the text after it)
+- subheading: a smaller heading, e.g. "Media contact", "Notes for editors", or a heading nested inside a section
+- quote: a standalone pull quote set apart from the text. Quotes in a media release with "said ..." attribution are body, not quote.
+- info: short key/value detail lines such as "When: ...", "Where: ...", "Time: ...", or contact lines (name, phone, email, web). One line per block.
+- bullet / numbered: list items, one item per block
+- ends: the end-of-release marker, e.g. "ENDS" or "###"
+- boilerplate: the "about the organisation" paragraph after the end marker
+- small: small print such as notes for editors, photo credits, disclaimers
+
+Rules:
+- Use every line number exactly once, in order. Never skip a line.
+- Only join lines that belong to the same sentence or paragraph. Keep each "Label: value" line and each contact line as its own block.
+- Lines shown as [IMAGE] or [DIVIDER] go in a block of their own (any style).
+- A normal blog post (not a media release) usually has no kicker, headline, ends or boilerplate.`
+
+// For pasting into a normal Claude chat (no API key): instructions, the JSON
+// shape to reply with, and the numbered lines.
+export function buildChatPrompt(lines: string): string {
+  return `${FORMAT_INSTRUCTIONS}
+
+Reply with only JSON in this exact shape, no other text:
+{"blocks":[{"style":"kicker","lines":[0]},{"style":"lead","lines":[2,3,4]}]}
+
+Allowed styles: ${AUTO_STYLES.join(", ")}
+
+The post:
+${lines}`
+}
+
+// Pull the plan out of a pasted chat reply (may include code fences or extra text)
+export function parsePlan(reply: string): FormatPlan | null {
+  const start = reply.indexOf("{")
+  const end = reply.lastIndexOf("}")
+  if (start < 0 || end <= start) return null
+  try {
+    const data = JSON.parse(reply.slice(start, end + 1)) as Partial<FormatPlan>
+    if (!Array.isArray(data.blocks)) return null
+    const blocks = data.blocks
+      .filter((b) => b && Array.isArray(b.lines))
+      .map((b) => ({
+        style: (AUTO_STYLES as readonly string[]).includes(b.style) ? b.style : "body",
+        lines: b.lines.map(Number),
+      }))
+    return blocks.length ? { blocks } : null
+  } catch {
+    return null
+  }
+}
+
 export type FormatPlan = { blocks: { style: AutoStyle; lines: number[] }[] }
 
 type Unit =

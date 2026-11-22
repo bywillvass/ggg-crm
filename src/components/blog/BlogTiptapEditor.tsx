@@ -15,6 +15,8 @@ import {
   Undo2,
   Redo2,
   RemoveFormatting,
+  Sparkles,
+  Loader2,
 } from "lucide-react"
 import { cn } from "cn"
 import {
@@ -23,6 +25,7 @@ import {
   BLOG_POST_TEMPLATE,
   type ParagraphStyle,
 } from "./blockStyles"
+import { extractUnits, unitsToPrompt, buildHtml, type FormatPlan } from "./autoFormat"
 
 type StyleItem = {
   key: string
@@ -238,6 +241,7 @@ export function BlogTiptapEditor({
 }) {
   const [mode, setMode] = useState<"editor" | "raw">("editor")
   const [rawHtml, setRawHtml] = useState(value)
+  const [formatting, setFormatting] = useState(false)
   const fileRef = useRef<HTMLInputElement | null>(null)
 
   const openFilePicker = () => {
@@ -293,6 +297,34 @@ export function BlogTiptapEditor({
     if (!editor.isEmpty && !window.confirm("Replace the current post body with this template?")) return
     editor.commands.setContent(html, { emitUpdate: true })
     editor.commands.focus("start")
+  }
+
+  async function autoFormat() {
+    if (!editor || editor.isEmpty) {
+      toast.error("Paste the post in first")
+      return
+    }
+    const units = extractUnits(editor.getHTML())
+    if (!units.length) return
+    setFormatting(true)
+    try {
+      const res = await fetch("/api/blog/format", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lines: unitsToPrompt(units) }),
+      })
+      const data = await res.json() as FormatPlan & { error?: string }
+      if (!res.ok || data.error) {
+        toast.error(data.error ?? "Auto-format failed")
+        return
+      }
+      editor.chain().focus().setContent(buildHtml(units, data)).run()
+      toast.success("Formatted. Check it over, or press Undo to go back.")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Auto-format failed")
+    } finally {
+      setFormatting(false)
+    }
   }
 
   async function handleUploadImage(file: File) {
@@ -431,6 +463,20 @@ export function BlogTiptapEditor({
           {editor && (
             <aside className="w-52 shrink-0 border-l bg-gray-50/70 p-3 space-y-4">
               <div className="sticky top-3 space-y-4">
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={autoFormat}
+                    disabled={formatting}
+                    title="Paste the whole post, then let AI apply the styles. Wording is never changed."
+                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-semibold bg-[#0C0F4C] text-white hover:bg-[#0C0F4C]/90 disabled:opacity-60 transition-colors"
+                  >
+                    {formatting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    {formatting ? "Formatting…" : "Auto-format"}
+                  </button>
+                  <p className="text-[10px] leading-snug text-gray-400">Paste the whole post, then click. Your words stay exactly the same.</p>
+                </div>
+
                 {STYLE_GROUPS.map((group) => (
                   <div key={group.title} className="space-y-1">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{group.title}</p>
